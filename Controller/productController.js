@@ -239,3 +239,118 @@ export const getFilterOptions = async (req, res) => {
     }
 };
 
+// Get single product by ID
+export const getProductById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                error: 'Product ID is required'
+            });
+        }
+
+        // Fetch product
+        const { data: product, error: productError } = await supabase
+            .from('products')
+            .select(`
+                id,
+                name,
+                description,
+                short_description,
+                price,
+                stock_quantity,
+                category_id,
+                subcategory,
+                deity,
+                benefits,
+                planet,
+                rarity,
+                status,
+                created_at
+            `)
+            .eq('id', id)
+            .eq('status', 'active')
+            .maybeSingle();
+
+        if (productError) {
+            return res.status(500).json({ 
+                success: false,
+                error: 'Failed to fetch product',
+                details: productError.message 
+            });
+        }
+
+        if (!product) {
+            return res.status(404).json({
+                success: false,
+                error: 'Product not found'
+            });
+        }
+
+        // Fetch images
+        const { data: imagesData, error: imagesError } = await supabase
+            .from('product_images')
+            .select('*')
+            .eq('product_id', id)
+            .maybeSingle();
+
+        let images = [];
+        if (!imagesError && imagesData) {
+            if (imagesData.image1) images.push(imagesData.image1);
+            if (imagesData.image2) images.push(imagesData.image2);
+            if (imagesData.image3) images.push(imagesData.image3);
+            if (imagesData.image4) images.push(imagesData.image4);
+        }
+
+        // Get category name
+        let categoryName = '';
+        if (product.category_id) {
+            const { data: categoryData } = await supabase
+                .from('categories')
+                .select('name')
+                .eq('id', product.category_id)
+                .maybeSingle();
+            
+            if (categoryData) {
+                categoryName = categoryData.name;
+            }
+        }
+
+        // Transform data
+        const transformedProduct = {
+            id: product.id,
+            name: product.name,
+            description: product.description,
+            short_description: product.short_description || '',
+            price: parseFloat(product.price),
+            stock: product.stock_quantity,
+            category: categoryName,
+            subcategory: product.subcategory || '',
+            deity: product.deity || '',
+            benefits: product.benefits || '',
+            planet: product.planet || '',
+            rarity: product.rarity || '',
+            images: images.filter(img => 
+                img !== null && 
+                img !== undefined && 
+                img !== '' &&
+                String(img).trim() !== '' &&
+                String(img).toLowerCase() !== 'null'
+            )
+        };
+
+        res.status(200).json({
+            success: true,
+            data: transformedProduct
+        });
+
+    } catch (error) {
+        res.status(500).json({ 
+            success: false,
+            error: 'Internal server error' 
+        });
+    }
+};
+
