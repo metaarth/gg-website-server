@@ -33,9 +33,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Global error handler - ensures we always return JSON (no HTML "Internal Server Error")
 app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
     res.status(500).json({
         success: false,
         message: 'Internal server error',

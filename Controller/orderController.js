@@ -44,7 +44,6 @@ export const createOrder = async (req, res) => {
             .gte('created_at', todayStart);
 
         if (countError) {
-            console.error('Order count error:', countError);
             return res.status(500).json({
                 success: false,
                 message: 'Failed to generate order number',
@@ -54,8 +53,6 @@ export const createOrder = async (req, res) => {
 
         const orderNumber = `GG-${today}-${String((count || 0) + 1).padStart(5, '0')}`;
 
-        // Create order - only include columns that exist in your schema (no Shiprocket columns here)
-        // Remove undefined so Supabase doesn't get invalid values
         const orderData = {
             user_id,
             order_number: orderNumber,
@@ -84,7 +81,6 @@ export const createOrder = async (req, res) => {
             .single();
 
         if (orderError) {
-            console.error('Order insert error:', orderError);
             const isRls = orderError.message?.toLowerCase().includes('policy') ||
                 orderError.message?.toLowerCase().includes('row-level security') ||
                 orderError.code === '42501';
@@ -92,13 +88,11 @@ export const createOrder = async (req, res) => {
                 success: false,
                 message: 'Failed to create order',
                 error: orderError.message,
-                code: orderError.code,
-                details: orderError.details,
-                hint: isRls ? 'Use SUPABASE_SERVICE_ROLE_KEY (not anon key) in website Server .env to bypass RLS.' : undefined
+                hint: isRls ? 'Use SUPABASE_SERVICE_ROLE_KEY in website Server .env' : undefined
             });
         }
 
-        // Create order items - frontend sends product_id from item.id (product id)
+        // Create order items
         const orderItems = items.map(item => ({
             order_id: order.id,
             product_id: item.product_id,
@@ -114,8 +108,6 @@ export const createOrder = async (req, res) => {
             .select();
 
         if (itemsError) {
-            console.error('Order items insert error:', itemsError);
-            // Rollback order creation
             await supabase
                 .from('orders')
                 .delete()
@@ -124,28 +116,17 @@ export const createOrder = async (req, res) => {
             return res.status(500).json({
                 success: false,
                 message: 'Failed to create order items',
-                error: itemsError.message,
-                code: itemsError.code,
-                details: itemsError.details
+                error: itemsError.message
             });
         }
 
-        // Update product stock quantities (optional - skip if RPC does not exist)
         for (const item of items) {
-            try {
-                const { error } = await supabase.rpc('decrement_stock', {
-                    product_id: item.product_id,
-                    quantity: item.quantity
-                });
-                if (error) {
-                    console.warn('decrement_stock RPC error (may not exist):', error.message);
-                }
-            } catch (e) {
-                // RPC may not exist or other error - ignore so order still succeeds
-            }
+            await supabase.rpc('decrement_stock', {
+                product_id: item.product_id,
+                quantity: item.quantity
+            }).catch(() => {});
         }
 
-        // Fetch complete order with address and items
         const { data: completeOrder, error: fetchError } = await supabase
             .from('orders')
             .select(`
@@ -156,11 +137,6 @@ export const createOrder = async (req, res) => {
             .eq('id', order.id)
             .single();
 
-        if (fetchError) {
-            console.error('Order fetch after create error:', fetchError);
-        }
-
-        // Build safe response (avoid circular refs / non-JSON values)
         const responseData = completeOrder || { ...order, addresses: null, order_items: createdItems };
         try {
             res.status(201).json({
@@ -169,7 +145,6 @@ export const createOrder = async (req, res) => {
                 data: responseData
             });
         } catch (jsonErr) {
-            console.error('JSON serialize error:', jsonErr);
             res.status(201).json({
                 success: true,
                 message: 'Order created successfully',
@@ -177,13 +152,10 @@ export const createOrder = async (req, res) => {
             });
         }
     } catch (error) {
-        console.error('Create order exception:', error);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
-            code: error.code,
-            details: error.details
+            error: error.message
         });
     }
 };
