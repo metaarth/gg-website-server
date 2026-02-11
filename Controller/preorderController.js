@@ -66,16 +66,21 @@ export const createPreorders = async (req, res) => {
         }
 
         const emailData = preorderConfirmation(data || rows);
-        await sendMail({
+        const mailResult = await sendMail({
             to: emailToUse,
             subject: emailData.subject,
             text: emailData.text,
             html: emailData.html
         });
 
+        if (!mailResult.success) {
+            console.error('[Preorder] Email not sent:', mailResult.error);
+        }
+
         res.status(201).json({
             success: true,
             message: 'Preorder saved. We’ll notify you when we launch!',
+            emailSent: mailResult.success,
             data: data || rows
         });
     } catch (err) {

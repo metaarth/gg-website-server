@@ -39,8 +39,18 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    optionsSuccessStatus: 200
 }));
+
+// Ensure CORS header is set on error responses (so browser doesn't show "blocked by CORS")
+const setCorsIfAllowed = (req, res) => {
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+};
 app.use(express.json());
 
 // Health check (for Render / load balancers)
@@ -58,6 +68,7 @@ app.use('/api/preorders', preorderRoutes);
 // Error handling for undefined API routes
 app.use((req, res, next) => {
     if (req.path.startsWith('/api/')) {
+        setCorsIfAllowed(req, res);
         return res.status(404).json({
             success: false,
             message: 'API route not found',
@@ -68,6 +79,7 @@ app.use((req, res, next) => {
 });
 
 app.use((err, req, res, next) => {
+    setCorsIfAllowed(req, res);
     res.status(500).json({
         success: false,
         message: 'Internal server error',

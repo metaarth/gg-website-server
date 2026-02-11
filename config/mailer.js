@@ -35,7 +35,7 @@ if (isConfigured) {
  */
 export async function sendMail(options) {
     if (!transporter) {
-        console.warn('Mail not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env');
+        console.warn('[Mail] Not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS in environment (e.g. Render dashboard).');
         return { success: false, error: 'Mail not configured' };
     }
 
@@ -50,7 +50,7 @@ export async function sendMail(options) {
         });
         return { success: true, messageId: result.messageId };
     } catch (err) {
-        console.error('Nodemailer error:', err?.message || err);
+        console.error('[Mail] Send failed:', err?.message || err);
         return { success: false, error: err?.message || String(err) };
     }
 }
