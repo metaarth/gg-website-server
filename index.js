@@ -14,9 +14,37 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
+// CORS: allow production client and local dev origins
+const allowedOrigins = [
+    'https://gg-website-client.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000'
+];
+if (process.env.CORS_ORIGIN) {
+    process.env.CORS_ORIGIN.split(',').forEach(origin => {
+        const trimmed = origin.trim();
+        if (trimmed && !allowedOrigins.includes(trimmed)) allowedOrigins.push(trimmed);
+    });
+}
+
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
+
+// Health check (for Render / load balancers)
+app.get('/api/health', (req, res) => res.status(200).json({ ok: true }));
 
 // Routes
 app.use('/api/carousel', carouselRoutes);
