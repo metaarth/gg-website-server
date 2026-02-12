@@ -81,6 +81,7 @@ export const createPreorders = async (req, res) => {
             success: true,
             message: 'Preorder saved. We’ll notify you when we launch!',
             emailSent: mailResult.success,
+            emailError: mailResult.success ? undefined : (mailResult.error || 'Unknown error'),
             data: data || rows
         });
     } catch (err) {

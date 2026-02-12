@@ -34,9 +34,8 @@ if (isConfigured) {
             user: SMTP_USER,
             pass: SMTP_PASS
         },
-        // Brevo recommends STARTTLS on 587; connection timeout for reliability
-        ...(port === 587 && { requireTLS: true }),
-        connectionTimeout: 10000,
+        // Port 587 uses STARTTLS by default (no need to force requireTLS)
+        connectionTimeout: 15000,
         greetingTimeout: 10000
     });
 }
