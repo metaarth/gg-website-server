@@ -9,7 +9,7 @@ import paymentRoutes from './Routes/paymentRoutes.js';
 import { paymentCallback } from './Controller/paymentController.js';
 import staticImagesRoutes from './Routes/staticImagesRoutes.js';
 import reviewRoutes from './Routes/reviewRoutes.js';
-import preorderRoutes from './Routes/preorderRoutes.js';
+import authRoutes from './Routes/authRoutes.js';
 import { isConfigured as mailConfigured } from './config/mailer.js';
 
 dotenv.config();
@@ -84,6 +84,7 @@ app.get('/api/health', (req, res) => res.status(200).json({ ok: true }));
 app.get('/api/health/mail', (req, res) => res.status(200).json({ mailConfigured: mailConfigured }));
 
 // Routes
+app.use('/api/auth', authRoutes);
 app.use('/api/carousel', carouselRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/addresses', addressRoutes);
@@ -91,7 +92,6 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/static-images', staticImagesRoutes);
 app.use('/api/reviews', reviewRoutes);
-app.use('/api/preorders', preorderRoutes);
 
 // Error handling for undefined API routes
 app.use((req, res, next) => {

@@ -1,4 +1,4 @@
-import supabase from '../config/supabaseClient.js';
+import { query } from '../config/db.js';
 
 export const createOrder = async (req, res) => {
     try {
@@ -10,41 +10,35 @@ export const createOrder = async (req, res) => {
             discount_amount = 0,
             shipping_charges = 0,
             payment_method,
-            notes
+            notes,
         } = req.body;
 
         if (!user_id || !address_id || !items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: user_id, address_id, items (array)'
+                message: 'Missing required fields: user_id, address_id, items (array)',
             });
         }
-
         if (!payment_method) {
             return res.status(400).json({
                 success: false,
-                message: 'Payment method is required'
+                message: 'Payment method is required',
             });
         }
 
-        const normalizedPaymentMethod = String(payment_method).toLowerCase() === 'cod' ? 'cod' : String(payment_method);
-        const final_amount = (total_amount || 0) - (discount_amount || 0) + (shipping_charges || 0);
+        const normalizedPaymentMethod =
+            String(payment_method).toLowerCase() === 'cod' ? 'cod' : String(payment_method);
+        const final_amount =
+            (Number(total_amount) || 0) - (Number(discount_amount) || 0) + (Number(shipping_charges) || 0);
         const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
         const todayStart = new Date().toISOString().split('T')[0];
-        const { count, error: countError } = await supabase
-            .from('orders')
-            .select('*', { count: 'exact', head: true })
-            .gte('created_at', todayStart);
 
-        if (countError) {
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to generate order number',
-                error: countError.message
-            });
-        }
-
-        const orderNumber = `GG-${today}-${String((count || 0) + 1).padStart(5, '0')}`;
+        const countRes = await query(
+            'SELECT COUNT(*) AS c FROM orders WHERE created_at >= $1::date',
+            [todayStart],
+        );
+        const count = parseInt(countRes.rows[0]?.c || 0, 10);
+        const orderNumber = `GG-${today}-${String(count + 1).padStart(5, '0')}`;
 
         const orderData = {
             user_id,
@@ -53,233 +47,210 @@ export const createOrder = async (req, res) => {
             total_amount: Number(total_amount) || 0,
             discount_amount: Number(discount_amount) || 0,
             shipping_charges: Number(shipping_charges) || 0,
-            final_amount: Number(final_amount),
+            final_amount,
             payment_method: normalizedPaymentMethod,
             payment_status: 'pending',
             order_status: 'pending',
-            notes: notes ?? null
+            notes: notes ?? null,
         };
+
         if (Number.isNaN(orderData.final_amount)) {
             return res.status(400).json({
                 success: false,
                 message: 'Invalid amount values',
-                error: 'total_amount, discount_amount, or shipping_charges are invalid'
             });
         }
 
-        const { data: order, error: orderError } = await supabase
-            .from('orders')
-            .insert([orderData])
-            .select()
-            .single();
-
-        if (orderError) {
-            const isRls = orderError.message?.toLowerCase().includes('policy') ||
-                orderError.message?.toLowerCase().includes('row-level security') ||
-                orderError.code === '42501';
+        const orderRes = await query(
+            `INSERT INTO orders (user_id, order_number, address_id, total_amount, discount_amount, shipping_charges, final_amount, payment_method, payment_status, order_status, notes)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             RETURNING *`,
+            [
+                orderData.user_id,
+                orderData.order_number,
+                orderData.address_id,
+                orderData.total_amount,
+                orderData.discount_amount,
+                orderData.shipping_charges,
+                orderData.final_amount,
+                orderData.payment_method,
+                orderData.payment_status,
+                orderData.order_status,
+                orderData.notes,
+            ],
+        );
+        const order = orderRes.rows[0];
+        if (!order) {
             return res.status(500).json({
                 success: false,
                 message: 'Failed to create order',
-                error: orderError.message,
-                hint: isRls ? 'Use SUPABASE_SERVICE_ROLE_KEY in website Server .env' : undefined
             });
         }
 
-        const orderItems = items.map(item => ({
-            order_id: order.id,
-            product_id: item.product_id,
-            product_name: item.product_name,
-            product_price: item.product_price,
-            quantity: item.quantity,
-            subtotal: item.product_price * item.quantity
-        }));
-
-        const { data: createdItems, error: itemsError } = await supabase
-            .from('order_items')
-            .insert(orderItems)
-            .select();
-
-        if (itemsError) {
-            await supabase
-                .from('orders')
-                .delete()
-                .eq('id', order.id);
-
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to create order items',
-                error: itemsError.message
-            });
+        for (const item of items) {
+            await query(
+                `INSERT INTO order_items (order_id, product_id, product_name, product_price, quantity, subtotal)
+                 VALUES ($1, $2, $3, $4, $5, $6)`,
+                [
+                    order.id,
+                    item.product_id,
+                    item.product_name,
+                    item.product_price,
+                    item.quantity,
+                    (item.product_price || 0) * (item.quantity || 0),
+                ],
+            );
         }
 
-        const { data: completeOrder } = await supabase
-            .from('orders')
-            .select(`
-                *,
-                addresses (*),
-                order_items (*)
-            `)
-            .eq('id', order.id)
-            .single();
-        const responseData = completeOrder || { ...order, addresses: null, order_items: createdItems };
+        const itemsRes = await query('SELECT * FROM order_items WHERE order_id = $1', [order.id]);
+        const addrRes = await query('SELECT * FROM addresses WHERE id = $1', [order.address_id]);
+        const responseData = {
+            ...order,
+            addresses: addrRes.rows[0] || null,
+            order_items: itemsRes.rows || [],
+        };
+
         res.status(201).json({
             success: true,
             message: 'Order created successfully',
-            data: responseData
+            data: responseData,
         });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error?.message || String(error)
+            error: error?.message || String(error),
         });
     }
 };
 
-// Get user orders
 export const getUserOrders = async (req, res) => {
     try {
         const { userId } = req.params;
-
         if (!userId) {
             return res.status(400).json({
                 success: false,
-                message: 'User ID is required'
+                message: 'User ID is required',
             });
         }
 
-        const { data, error } = await supabase
-            .from('orders')
-            .select(`
-                *,
-                addresses (*),
-                order_items (*)
-            `)
-            .eq('user_id', userId)
-            .order('created_at', { ascending: false });
+        const ordersRes = await query(
+            'SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC',
+            [userId],
+        );
+        const orders = ordersRes.rows || [];
 
-        if (error) {
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to fetch orders',
-                error: error.message
+        const data = [];
+        for (const o of orders) {
+            const itemsRes = await query('SELECT * FROM order_items WHERE order_id = $1', [o.id]);
+            const addrRes = await query('SELECT * FROM addresses WHERE id = $1', [o.address_id]);
+            data.push({
+                ...o,
+                addresses: addrRes.rows[0] || null,
+                order_items: itemsRes.rows || [],
             });
         }
 
-        res.status(200).json({
-            success: true,
-            data: data || []
-        });
+        res.status(200).json({ success: true, data });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
         });
     }
 };
 
-// Get single order by ID
 export const getOrderById = async (req, res) => {
     try {
         const { id } = req.params;
         const { userId } = req.query;
-
         if (!id || !userId) {
             return res.status(400).json({
                 success: false,
-                message: 'Order ID and User ID are required'
+                message: 'Order ID and User ID are required',
             });
         }
 
-        const { data, error } = await supabase
-            .from('orders')
-            .select(`
-                *,
-                addresses (*),
-                order_items (*)
-            `)
-            .eq('id', id)
-            .eq('user_id', userId)
-            .single();
-
-        if (error) {
-            if (error.code === 'PGRST116') {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Order not found'
-                });
-            }
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to fetch order',
-                error: error.message
-            });
+        const orderRes = await query(
+            'SELECT * FROM orders WHERE id = $1 AND user_id = $2',
+            [id, userId],
+        );
+        const order = orderRes.rows[0];
+        if (!order) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
         }
+
+        const itemsRes = await query('SELECT * FROM order_items WHERE order_id = $1', [id]);
+        const addrRes = await query('SELECT * FROM addresses WHERE id = $1', [order.address_id]);
 
         res.status(200).json({
             success: true,
-            data
+            data: {
+                ...order,
+                addresses: addrRes.rows[0] || null,
+                order_items: itemsRes.rows || [],
+            },
         });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
         });
     }
 };
 
-// Update order status
 export const updateOrderStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const { userId, order_status, payment_status } = req.body;
-
         if (!id || !userId) {
             return res.status(400).json({
                 success: false,
-                message: 'Order ID and User ID are required'
+                message: 'Order ID and User ID are required',
             });
         }
 
-        const updateData = {};
-        if (order_status) updateData.order_status = order_status;
-        if (payment_status) updateData.payment_status = payment_status;
-
-        const { data, error } = await supabase
-            .from('orders')
-            .update(updateData)
-            .eq('id', id)
-            .eq('user_id', userId)
-            .select()
-            .single();
-
-        if (error) {
-            if (error.code === 'PGRST116') {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Order not found'
-                });
-            }
-            return res.status(500).json({
+        const updates = [];
+        const params = [];
+        let idx = 1;
+        if (order_status) {
+            updates.push(`order_status = $${idx}`);
+            params.push(order_status);
+            idx++;
+        }
+        if (payment_status) {
+            updates.push(`payment_status = $${idx}`);
+            params.push(payment_status);
+            idx++;
+        }
+        if (updates.length === 0) {
+            return res.status(400).json({
                 success: false,
-                message: 'Failed to update order',
-                error: error.message
+                message: 'Provide order_status and/or payment_status',
             });
+        }
+        params.push(id, userId);
+        const resQ = await query(
+            `UPDATE orders SET ${updates.join(', ')} WHERE id = $${idx} AND user_id = $${idx + 1} RETURNING *`,
+            params,
+        );
+        const data = resQ.rows[0];
+        if (!data) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
         res.status(200).json({
             success: true,
             message: 'Order updated successfully',
-            data
+            data,
         });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
         });
     }
 };
-

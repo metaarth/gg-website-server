@@ -1,95 +1,61 @@
-import supabase from '../config/supabaseClient.js';
+import { query } from '../config/db.js';
 
-// Get all addresses for a user
 export const getUserAddresses = async (req, res) => {
     try {
         const { userId } = req.params;
-
         if (!userId) {
             return res.status(400).json({
                 success: false,
-                message: 'User ID is required'
+                message: 'User ID is required',
             });
         }
 
-        const { data, error } = await supabase
-            .from('addresses')
-            .select('*')
-            .eq('user_id', userId)
-            .eq('is_active', true)
-            .order('is_default', { ascending: false })
-            .order('created_at', { ascending: false });
-
-        if (error) {
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to fetch addresses',
-                error: error.message
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            data: data || []
-        });
+        const resQ = await query(
+            'SELECT * FROM addresses WHERE user_id = $1 AND is_active = true ORDER BY is_default DESC, created_at DESC',
+            [userId],
+        );
+        res.status(200).json({ success: true, data: resQ.rows || [] });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
         });
     }
 };
 
-// Get single address by ID
 export const getAddressById = async (req, res) => {
     try {
         const { id } = req.params;
         const { userId } = req.query;
-
         if (!id || !userId) {
             return res.status(400).json({
                 success: false,
-                message: 'Address ID and User ID are required'
+                message: 'Address ID and User ID are required',
             });
         }
 
-        const { data, error } = await supabase
-            .from('addresses')
-            .select('*')
-            .eq('id', id)
-            .eq('user_id', userId)
-            .eq('is_active', true)
-            .single();
-
-        if (error) {
-            if (error.code === 'PGRST116') {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Address not found'
-                });
-            }
-            return res.status(500).json({
+        const resQ = await query(
+            'SELECT * FROM addresses WHERE id = $1 AND user_id = $2 AND is_active = true',
+            [id, userId],
+        );
+        const data = resQ.rows[0];
+        if (!data) {
+            return res.status(404).json({
                 success: false,
-                message: 'Failed to fetch address',
-                error: error.message
+                message: 'Address not found',
             });
         }
-
-        res.status(200).json({
-            success: true,
-            data
-        });
+        res.status(200).json({ success: true, data });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
         });
     }
 };
 
-// Create new address
 export const createAddress = async (req, res) => {
     try {
         const {
@@ -104,80 +70,76 @@ export const createAddress = async (req, res) => {
             country,
             latitude,
             longitude,
-            is_default
+            is_default,
         } = req.body;
 
-        // Validation
-        if (!user_id || !receiver_name || !receiver_phone || !address_line1 || !city || !state || !postal_code) {
+        if (
+            !user_id ||
+            !receiver_name ||
+            !receiver_phone ||
+            !address_line1 ||
+            !city ||
+            !state ||
+            !postal_code
+        ) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: user_id, receiver_name, receiver_phone, address_line1, city, state, postal_code'
+                message:
+                    'Missing required fields: user_id, receiver_name, receiver_phone, address_line1, city, state, postal_code',
             });
         }
 
-        const addressData = {
-            user_id,
-            receiver_name,
-            receiver_phone,
-            address_line1,
-            address_line2: address_line2 || null,
-            city,
-            state,
-            postal_code,
-            country: country || 'India',
-            latitude: latitude || null,
-            longitude: longitude || null,
-            is_default: is_default || false,
-            is_active: true
-        };
+        // Normalize user_id to string (works for both bigint and uuid in PostgreSQL)
+        const uid = user_id != null ? String(user_id) : null;
 
-        // If this is set as default, unset other defaults
         if (is_default) {
-            await supabase
-                .from('addresses')
-                .update({ is_default: false })
-                .eq('user_id', user_id)
-                .neq('is_default', false);
+            await query(
+                'UPDATE addresses SET is_default = false WHERE user_id = $1 AND is_default = true',
+                [uid],
+            );
         }
 
-        const { data, error } = await supabase
-            .from('addresses')
-            .insert([addressData])
-            .select()
-            .single();
-
-        if (error) {
-            let errorMessage = 'Failed to create address';
-            if (error.code === 'PGRST116') {
-                errorMessage = 'Address table not found. Please run the database schema.';
-            } else if (error.code === '42501') {
-                errorMessage = 'Permission denied. Check RLS policies or use service role key.';
-            } else if (error.message) {
-                errorMessage = error.message;
-            }
-            
-            return res.status(500).json({
-                success: false,
-                message: errorMessage,
-                error: error.message
-            });
-        }
-
+        // addresses.id may be UUID (no default); generate it so INSERT works
+        const resQ = await query(
+            `INSERT INTO addresses (id, user_id, receiver_name, receiver_phone, address_line1, address_line2, city, state, postal_code, country, latitude, longitude, is_default, is_active)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true)
+             RETURNING *`,
+            [
+                uid,
+                receiver_name,
+                receiver_phone,
+                address_line1,
+                address_line2 || null,
+                city,
+                state,
+                postal_code,
+                country || 'India',
+                latitude ?? null,
+                longitude ?? null,
+                is_default || false,
+            ],
+        );
+        const data = resQ.rows[0];
         res.status(201).json({
             success: true,
             message: 'Address created successfully',
-            data
+            data,
         });
     } catch (error) {
+        console.error('createAddress error:', error.message, error.code, error.detail);
+        const msg = error.message || 'Internal server error';
+        const hint = error.code === '22P02' || (msg && msg.toLowerCase().includes('uuid'))
+            ? 'Your addresses.user_id may be UUID while the app uses numeric user id. In pgAdmin run: ALTER TABLE addresses ALTER COLUMN user_id TYPE BIGINT USING NULL; (only if you use the app\'s users table with bigint id)'
+            : undefined;
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: msg,
+            ...(hint && { hint }),
         });
     }
 };
 
-// Update address
 export const updateAddress = async (req, res) => {
     try {
         const { id } = req.params;
@@ -193,176 +155,142 @@ export const updateAddress = async (req, res) => {
             country,
             latitude,
             longitude,
-            is_default
+            is_default,
         } = req.body;
 
         if (!id || !user_id) {
             return res.status(400).json({
                 success: false,
-                message: 'Address ID and User ID are required'
+                message: 'Address ID and User ID are required',
             });
         }
 
         const updateData = {};
-        if (receiver_name) updateData.receiver_name = receiver_name;
-        if (receiver_phone) updateData.receiver_phone = receiver_phone;
-        if (address_line1) updateData.address_line1 = address_line1;
+        if (receiver_name !== undefined) updateData.receiver_name = receiver_name;
+        if (receiver_phone !== undefined) updateData.receiver_phone = receiver_phone;
+        if (address_line1 !== undefined) updateData.address_line1 = address_line1;
         if (address_line2 !== undefined) updateData.address_line2 = address_line2;
-        if (city) updateData.city = city;
-        if (state) updateData.state = state;
-        if (postal_code) updateData.postal_code = postal_code;
-        if (country) updateData.country = country;
+        if (city !== undefined) updateData.city = city;
+        if (state !== undefined) updateData.state = state;
+        if (postal_code !== undefined) updateData.postal_code = postal_code;
+        if (country !== undefined) updateData.country = country;
         if (latitude !== undefined) updateData.latitude = latitude;
         if (longitude !== undefined) updateData.longitude = longitude;
         if (is_default !== undefined) updateData.is_default = is_default;
 
-        // If setting as default, unset other defaults
         if (is_default === true) {
-            await supabase
-                .from('addresses')
-                .update({ is_default: false })
-                .eq('user_id', user_id)
-                .neq('id', id);
+            await query(
+                'UPDATE addresses SET is_default = false WHERE user_id = $1 AND id != $2',
+                [user_id, id],
+            );
         }
 
-        const { data, error } = await supabase
-            .from('addresses')
-            .update(updateData)
-            .eq('id', id)
-            .eq('user_id', user_id)
-            .select()
-            .single();
-
-        if (error) {
-            if (error.code === 'PGRST116') {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Address not found'
-                });
+        const keys = Object.keys(updateData);
+        if (keys.length === 0) {
+            const one = await query('SELECT * FROM addresses WHERE id = $1 AND user_id = $2', [
+                id,
+                user_id,
+            ]);
+            const data = one.rows[0];
+            if (!data) {
+                return res.status(404).json({ success: false, message: 'Address not found' });
             }
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to update address',
-                error: error.message
+            return res.status(200).json({
+                success: true,
+                message: 'Address updated successfully',
+                data,
             });
         }
 
+        const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+        const values = keys.map((k) => updateData[k]);
+        values.push(id, user_id);
+
+        const resQ = await query(
+            `UPDATE addresses SET ${setClause} WHERE id = $${keys.length + 1} AND user_id = $${keys.length + 2} RETURNING *`,
+            values,
+        );
+        const data = resQ.rows[0];
+        if (!data) {
+            return res.status(404).json({ success: false, message: 'Address not found' });
+        }
         res.status(200).json({
             success: true,
             message: 'Address updated successfully',
-            data
+            data,
         });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
         });
     }
 };
 
-// Delete address (soft delete)
 export const deleteAddress = async (req, res) => {
     try {
         const { id } = req.params;
         const { userId } = req.query;
-
         if (!id || !userId) {
             return res.status(400).json({
                 success: false,
-                message: 'Address ID and User ID are required'
+                message: 'Address ID and User ID are required',
             });
         }
 
-        const { data, error } = await supabase
-            .from('addresses')
-            .update({ is_active: false })
-            .eq('id', id)
-            .eq('user_id', userId)
-            .select()
-            .single();
-
-        if (error) {
-            if (error.code === 'PGRST116') {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Address not found'
-                });
-            }
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to delete address',
-                error: error.message
-            });
+        const resQ = await query(
+            'UPDATE addresses SET is_active = false WHERE id = $1 AND user_id = $2 RETURNING *',
+            [id, userId],
+        );
+        const data = resQ.rows[0];
+        if (!data) {
+            return res.status(404).json({ success: false, message: 'Address not found' });
         }
-
         res.status(200).json({
             success: true,
             message: 'Address deleted successfully',
-            data
+            data,
         });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
         });
     }
 };
 
-// Set default address
 export const setDefaultAddress = async (req, res) => {
     try {
         const { id } = req.params;
         const { userId } = req.body;
-
         if (!id || !userId) {
             return res.status(400).json({
                 success: false,
-                message: 'Address ID and User ID are required'
+                message: 'Address ID and User ID are required',
             });
         }
 
-        // Unset all other defaults
-        await supabase
-            .from('addresses')
-            .update({ is_default: false })
-            .eq('user_id', userId);
-
-        // Set this address as default
-        const { data, error } = await supabase
-            .from('addresses')
-            .update({ is_default: true })
-            .eq('id', id)
-            .eq('user_id', userId)
-            .select()
-            .single();
-
-        if (error) {
-            if (error.code === 'PGRST116') {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Address not found'
-                });
-            }
-            return res.status(500).json({
-                success: false,
-                message: 'Failed to set default address',
-                error: error.message
-            });
+        await query('UPDATE addresses SET is_default = false WHERE user_id = $1', [userId]);
+        const resQ = await query(
+            'UPDATE addresses SET is_default = true WHERE id = $1 AND user_id = $2 RETURNING *',
+            [id, userId],
+        );
+        const data = resQ.rows[0];
+        if (!data) {
+            return res.status(404).json({ success: false, message: 'Address not found' });
         }
-
         res.status(200).json({
             success: true,
             message: 'Default address updated successfully',
-            data
+            data,
         });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message
+            error: error.message,
         });
     }
 };
-

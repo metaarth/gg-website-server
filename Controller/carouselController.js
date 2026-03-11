@@ -1,29 +1,23 @@
-import supabase from '../config/supabaseClient.js';
+import { query } from '../config/db.js';
+import { getS3PublicUrl } from '../config/s3.js';
 
-// Get all carousel images filtered by device type
 export const getCarouselImages = async (req, res) => {
     try {
         const { device_type } = req.query;
-        
-        // Default to desktop if device_type is not provided
-        const filterDeviceType = device_type || 'desktop';
-        
-        // Always filter by device_type - normalize to lowercase for case-insensitive matching
-        const { data, error } = await supabase
-            .from('website_carousel')
-            .select('id, image_url, device_type, created_at')
-            .eq('device_type', filterDeviceType.toLowerCase())
-            .order('created_at', { ascending: false });
+        const filterDeviceType = (device_type || 'desktop').toLowerCase();
 
-        if (error) {
-            console.error('Supabase error:', error);
-            return res.status(500).json({ error: 'Failed to fetch carousel images' });
-        }
-
-        res.json(data || []);
+        const resQ = await query(
+            'SELECT id, image_url, device_type, created_at FROM website_carousel WHERE device_type = $1 ORDER BY created_at DESC',
+            [filterDeviceType],
+        );
+        const rows = resQ.rows || [];
+        const data = rows.map((row) => ({
+            ...row,
+            image_url: getS3PublicUrl(row.image_url) || row.image_url,
+        }));
+        res.json(data);
     } catch (error) {
         console.error('Server error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
-

@@ -1,47 +1,28 @@
-import supabase from '../config/supabaseClient.js';
+import { query } from '../config/db.js';
+import { getStaticImageUrl } from '../config/s3.js';
 
-const BUCKET = 'GGIMG';
-const BASE_PATH = 'StaticImg';
-
-function buildPublicUrl(folder, file_name) {
-    const base = process.env.SUPABASE_URL?.replace(/\/$/, '');
-    if (!base) return null;
-    return `${base}/storage/v1/object/public/${BUCKET}/${BASE_PATH}/${encodeURIComponent(folder)}/${encodeURIComponent(file_name)}`;
-}
-
-/**
- * GET /api/static-images?folder=Zodiac
- * GET /api/static-images?folder=Rudrakshas
- * GET /api/static-images  (returns all folders, grouped)
- */
 export const getStaticImages = async (req, res) => {
     try {
         const { folder } = req.query;
 
-        let query = supabase
-            .from('static_images')
-            .select('id, folder, key, file_name, url, sort_order')
-            .order('sort_order', { ascending: true })
-            .order('key', { ascending: true });
-
+        let sql =
+            'SELECT id, folder, key, file_name, url, sort_order FROM static_images ORDER BY sort_order ASC, key ASC';
+        const params = [];
         if (folder) {
-            query = query.eq('folder', folder);
+            sql = 'SELECT id, folder, key, file_name, url, sort_order FROM static_images WHERE folder = $1 ORDER BY sort_order ASC, key ASC';
+            params.push(folder);
         }
 
-        const { data, error } = await query;
+        const resQ = await query(sql, params);
+        const rows = resQ.rows || [];
 
-        if (error) {
-            console.error('Supabase static_images error:', error);
-            return res.status(500).json({ error: 'Failed to fetch static images' });
-        }
-
-        const items = (data || []).map((row) => ({
+        const items = rows.map((row) => ({
             id: row.id,
             folder: row.folder,
             key: row.key,
             file_name: row.file_name,
             sort_order: row.sort_order,
-            url: row.url || buildPublicUrl(row.folder, row.file_name)
+            url: row.url || getStaticImageUrl(row.folder, row.file_name),
         }));
 
         if (folder) {
