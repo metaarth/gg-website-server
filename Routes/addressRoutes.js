@@ -1,4 +1,5 @@
 import express from 'express';
+import { authenticate } from '../Middleware/authMiddleware.js';
 import {
     getUserAddresses,
     getAddressById,
@@ -10,21 +11,12 @@ import {
 
 const router = express.Router();
 
-// Get all addresses for a user (must come before /:id)
-router.get('/user/:userId', getUserAddresses);
-router.get('/:id', getAddressById);
-
-// Create new address
-router.post('/', createAddress);
-
-// Update address
-router.put('/:id', updateAddress);
-
-// Delete address (soft delete)
-router.delete('/:id', deleteAddress);
-
-// Set default address
-router.patch('/:id/default', setDefaultAddress);
+router.get('/user/:userId', authenticate, getUserAddresses);
+router.get('/:id', authenticate, getAddressById);
+router.post('/', authenticate, createAddress);
+router.put('/:id', authenticate, updateAddress);
+router.delete('/:id', authenticate, deleteAddress);
+router.patch('/:id/default', authenticate, setDefaultAddress);
 
 export default router;
 

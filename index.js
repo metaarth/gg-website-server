@@ -1,6 +1,11 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
 import carouselRoutes from './Routes/carouselRoutes.js';
 import productRoutes from './Routes/productRoutes.js';
 import addressRoutes from './Routes/addressRoutes.js';
@@ -12,10 +17,12 @@ import reviewRoutes from './Routes/reviewRoutes.js';
 import authRoutes from './Routes/authRoutes.js';
 import { isConfigured as mailConfigured } from './config/mailer.js';
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const isProduction = process.env.NODE_ENV === 'production';
 
 // CORS: allow production client, local dev, and Easebuzz (user is redirected from Easebuzz to our callback)
 const allowedOrigins = [
@@ -23,8 +30,10 @@ const allowedOrigins = [
     'https://testpay.easebuzz.in',
     'https://pay.easebuzz.in',
     'http://localhost:5173',
+    'http://localhost:5174',
     'http://localhost:3000',
     'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
     'http://127.0.0.1:3000',
     'http://localhost',
     'http://localhost:80',
@@ -48,8 +57,26 @@ function isAllowedOrigin(origin) {
     return false;
 }
 
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(compression());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  message: { success: false, message: 'Too many requests' },
+});
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { success: false, message: 'Too many attempts' },
+});
+
+app.use('/api/', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api/payment/initiate', authLimiter);
 
 // Payment callback must be registered BEFORE CORS so Easebuzz redirect is never blocked
 app.post('/api/payment/callback', paymentCallback);
@@ -111,10 +138,10 @@ app.use((err, req, res, next) => {
     res.status(500).json({
         success: false,
         message: 'Internal server error',
-        error: err.message || String(err)
+        ...(!isProduction && { error: err.message || String(err) }),
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+    if (!isProduction) console.log(`Server is running on port ${PORT}`);
 });

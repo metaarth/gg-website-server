@@ -70,7 +70,10 @@ export const getProductsByCategory = async (req, res) => {
             idx++;
         }
 
-        sql += ` ORDER BY created_at DESC`;
+        const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+        const offset = parseInt(req.query.offset, 10) || 0;
+        sql += ` ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`;
+        params.push(limit, offset);
 
         const productsRes = await query(sql, params);
         const products = productsRes.rows || [];

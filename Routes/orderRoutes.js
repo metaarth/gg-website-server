@@ -1,4 +1,5 @@
 import express from 'express';
+import { authenticate } from '../Middleware/authMiddleware.js';
 import {
     createOrder,
     getUserOrders,
@@ -8,17 +9,10 @@ import {
 
 const router = express.Router();
 
-// Create new order
-router.post('/', createOrder);
-
-// Get all orders for a user
-router.get('/user/:userId', getUserOrders);
-
-// Get single order by ID
-router.get('/:id', getOrderById);
-
-// Update order status
-router.patch('/:id/status', updateOrderStatus);
+router.post('/', authenticate, createOrder);
+router.get('/user/:userId', authenticate, getUserOrders);
+router.get('/:id', authenticate, getOrderById);
+router.patch('/:id/status', authenticate, updateOrderStatus);
 
 export default router;
 

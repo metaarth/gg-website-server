@@ -1,4 +1,5 @@
 import express from 'express';
+import { authenticate } from '../Middleware/authMiddleware.js';
 import {
     getReviewsByProduct,
     addReview,
@@ -8,7 +9,7 @@ import {
 const router = express.Router({ mergeParams: false });
 
 router.get('/product/:productId', getReviewsByProduct);
-router.post('/', addReview);
-router.delete('/:id', deleteReview);
+router.post('/', authenticate, addReview);
+router.delete('/:id', authenticate, deleteReview);
 
 export default router;

@@ -2,12 +2,13 @@ import { query } from '../config/db.js';
 
 export const getUserAddresses = async (req, res) => {
     try {
-        const { userId } = req.params;
+        const userId = req.user?.id;
+        const { userId: paramUserId } = req.params;
         if (!userId) {
-            return res.status(400).json({
-                success: false,
-                message: 'User ID is required',
-            });
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
+        if (paramUserId && String(paramUserId) !== String(userId)) {
+            return res.status(403).json({ success: false, message: 'Forbidden' });
         }
 
         const resQ = await query(
@@ -19,7 +20,6 @@ export const getUserAddresses = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
         });
     }
 };
@@ -27,11 +27,14 @@ export const getUserAddresses = async (req, res) => {
 export const getAddressById = async (req, res) => {
     try {
         const { id } = req.params;
-        const { userId } = req.query;
-        if (!id || !userId) {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
+        if (!id) {
             return res.status(400).json({
                 success: false,
-                message: 'Address ID and User ID are required',
+                message: 'Address ID is required',
             });
         }
 
@@ -51,15 +54,17 @@ export const getAddressById = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
         });
     }
 };
 
 export const createAddress = async (req, res) => {
     try {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
         const {
-            user_id,
             receiver_name,
             receiver_phone,
             address_line1,
@@ -74,7 +79,6 @@ export const createAddress = async (req, res) => {
         } = req.body;
 
         if (
-            !user_id ||
             !receiver_name ||
             !receiver_phone ||
             !address_line1 ||
@@ -85,12 +89,11 @@ export const createAddress = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message:
-                    'Missing required fields: user_id, receiver_name, receiver_phone, address_line1, city, state, postal_code',
+                    'Missing required fields: receiver_name, receiver_phone, address_line1, city, state, postal_code',
             });
         }
 
-        // Normalize user_id to string (works for both bigint and uuid in PostgreSQL)
-        const uid = user_id != null ? String(user_id) : null;
+        const uid = String(userId);
 
         if (is_default) {
             await query(
@@ -126,16 +129,9 @@ export const createAddress = async (req, res) => {
             data,
         });
     } catch (error) {
-        console.error('createAddress error:', error.message, error.code, error.detail);
-        const msg = error.message || 'Internal server error';
-        const hint = error.code === '22P02' || (msg && msg.toLowerCase().includes('uuid'))
-            ? 'Your addresses.user_id may be UUID while the app uses numeric user id. In pgAdmin run: ALTER TABLE addresses ALTER COLUMN user_id TYPE BIGINT USING NULL; (only if you use the app\'s users table with bigint id)'
-            : undefined;
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: msg,
-            ...(hint && { hint }),
         });
     }
 };
@@ -143,8 +139,11 @@ export const createAddress = async (req, res) => {
 export const updateAddress = async (req, res) => {
     try {
         const { id } = req.params;
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
         const {
-            user_id,
             receiver_name,
             receiver_phone,
             address_line1,
@@ -158,10 +157,10 @@ export const updateAddress = async (req, res) => {
             is_default,
         } = req.body;
 
-        if (!id || !user_id) {
+        if (!id) {
             return res.status(400).json({
                 success: false,
-                message: 'Address ID and User ID are required',
+                message: 'Address ID is required',
             });
         }
 
@@ -181,7 +180,7 @@ export const updateAddress = async (req, res) => {
         if (is_default === true) {
             await query(
                 'UPDATE addresses SET is_default = false WHERE user_id = $1 AND id != $2',
-                [user_id, id],
+                [userId, id],
             );
         }
 
@@ -189,7 +188,7 @@ export const updateAddress = async (req, res) => {
         if (keys.length === 0) {
             const one = await query('SELECT * FROM addresses WHERE id = $1 AND user_id = $2', [
                 id,
-                user_id,
+                userId,
             ]);
             const data = one.rows[0];
             if (!data) {
@@ -204,7 +203,7 @@ export const updateAddress = async (req, res) => {
 
         const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
         const values = keys.map((k) => updateData[k]);
-        values.push(id, user_id);
+        values.push(id, userId);
 
         const resQ = await query(
             `UPDATE addresses SET ${setClause} WHERE id = $${keys.length + 1} AND user_id = $${keys.length + 2} RETURNING *`,
@@ -223,7 +222,6 @@ export const updateAddress = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
         });
     }
 };
@@ -231,11 +229,14 @@ export const updateAddress = async (req, res) => {
 export const deleteAddress = async (req, res) => {
     try {
         const { id } = req.params;
-        const { userId } = req.query;
-        if (!id || !userId) {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
+        if (!id) {
             return res.status(400).json({
                 success: false,
-                message: 'Address ID and User ID are required',
+                message: 'Address ID is required',
             });
         }
 
@@ -256,7 +257,6 @@ export const deleteAddress = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
         });
     }
 };
@@ -264,11 +264,14 @@ export const deleteAddress = async (req, res) => {
 export const setDefaultAddress = async (req, res) => {
     try {
         const { id } = req.params;
-        const { userId } = req.body;
-        if (!id || !userId) {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
+        if (!id) {
             return res.status(400).json({
                 success: false,
-                message: 'Address ID and User ID are required',
+                message: 'Address ID is required',
             });
         }
 
@@ -290,7 +293,6 @@ export const setDefaultAddress = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
         });
     }
 };

@@ -2,8 +2,14 @@ import { query } from '../config/db.js';
 
 export const createOrder = async (req, res) => {
     try {
+        const user_id = req.user?.id;
+        if (!user_id) {
+            return res.status(401).json({
+                success: false,
+                message: 'Not authenticated',
+            });
+        }
         const {
-            user_id,
             address_id,
             items,
             total_amount,
@@ -13,10 +19,10 @@ export const createOrder = async (req, res) => {
             notes,
         } = req.body;
 
-        if (!user_id || !address_id || !items || !Array.isArray(items) || items.length === 0) {
+        if (!address_id || !items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: user_id, address_id, items (array)',
+                message: 'Missing required fields: address_id, items (array)',
             });
         }
         if (!payment_method) {
@@ -119,7 +125,6 @@ export const createOrder = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error?.message || String(error),
         });
     }
 };
@@ -127,11 +132,12 @@ export const createOrder = async (req, res) => {
 export const getUserOrders = async (req, res) => {
     try {
         const { userId } = req.params;
-        if (!userId) {
-            return res.status(400).json({
-                success: false,
-                message: 'User ID is required',
-            });
+        const authUserId = req.user?.id;
+        if (!authUserId) {
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
+        if (!userId || String(userId) !== String(authUserId)) {
+            return res.status(403).json({ success: false, message: 'Forbidden' });
         }
 
         const ordersRes = await query(
@@ -139,24 +145,40 @@ export const getUserOrders = async (req, res) => {
             [userId],
         );
         const orders = ordersRes.rows || [];
-
-        const data = [];
-        for (const o of orders) {
-            const itemsRes = await query('SELECT * FROM order_items WHERE order_id = $1', [o.id]);
-            const addrRes = await query('SELECT * FROM addresses WHERE id = $1', [o.address_id]);
-            data.push({
-                ...o,
-                addresses: addrRes.rows[0] || null,
-                order_items: itemsRes.rows || [],
-            });
+        if (orders.length === 0) {
+            return res.status(200).json({ success: true, data: [] });
         }
+
+        const orderIds = orders.map((o) => o.id);
+        const addressIds = [...new Set(orders.map((o) => o.address_id).filter(Boolean))];
+        const [itemsRes, addrRes] = await Promise.all([
+            query('SELECT * FROM order_items WHERE order_id = ANY($1::int[])', [orderIds]),
+            addressIds.length > 0
+                ? query('SELECT * FROM addresses WHERE id = ANY($1)', [addressIds])
+                : { rows: [] },
+        ]);
+
+        const itemsByOrder = (itemsRes.rows || []).reduce((acc, row) => {
+            if (!acc[row.order_id]) acc[row.order_id] = [];
+            acc[row.order_id].push(row);
+            return acc;
+        }, {});
+        const addrMap = (addrRes.rows || []).reduce((acc, row) => {
+            acc[row.id] = row;
+            return acc;
+        }, {});
+
+        const data = orders.map((o) => ({
+            ...o,
+            order_items: itemsByOrder[o.id] || [],
+            addresses: addrMap[o.address_id] || null,
+        }));
 
         res.status(200).json({ success: true, data });
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
         });
     }
 };
@@ -164,25 +186,30 @@ export const getUserOrders = async (req, res) => {
 export const getOrderById = async (req, res) => {
     try {
         const { id } = req.params;
-        const { userId } = req.query;
-        if (!id || !userId) {
+        const authUserId = req.user?.id;
+        if (!authUserId) {
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
+        if (!id) {
             return res.status(400).json({
                 success: false,
-                message: 'Order ID and User ID are required',
+                message: 'Order ID is required',
             });
         }
 
-        const orderRes = await query(
-            'SELECT * FROM orders WHERE id = $1 AND user_id = $2',
-            [id, userId],
-        );
+        const orderRes = await query('SELECT * FROM orders WHERE id = $1', [id]);
         const order = orderRes.rows[0];
         if (!order) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
+        if (String(order.user_id) !== String(authUserId)) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
 
-        const itemsRes = await query('SELECT * FROM order_items WHERE order_id = $1', [id]);
-        const addrRes = await query('SELECT * FROM addresses WHERE id = $1', [order.address_id]);
+        const [itemsRes, addrRes] = await Promise.all([
+            query('SELECT * FROM order_items WHERE order_id = $1', [id]),
+            query('SELECT * FROM addresses WHERE id = $1', [order.address_id]),
+        ]);
 
         res.status(200).json({
             success: true,
@@ -196,7 +223,6 @@ export const getOrderById = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
         });
     }
 };
@@ -204,11 +230,15 @@ export const getOrderById = async (req, res) => {
 export const updateOrderStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { userId, order_status, payment_status } = req.body;
-        if (!id || !userId) {
+        const authUserId = req.user?.id;
+        if (!authUserId) {
+            return res.status(401).json({ success: false, message: 'Not authenticated' });
+        }
+        const { order_status, payment_status } = req.body;
+        if (!id) {
             return res.status(400).json({
                 success: false,
-                message: 'Order ID and User ID are required',
+                message: 'Order ID is required',
             });
         }
 
@@ -231,7 +261,7 @@ export const updateOrderStatus = async (req, res) => {
                 message: 'Provide order_status and/or payment_status',
             });
         }
-        params.push(id, userId);
+        params.push(id, authUserId);
         const resQ = await query(
             `UPDATE orders SET ${updates.join(', ')} WHERE id = $${idx} AND user_id = $${idx + 1} RETURNING *`,
             params,
@@ -250,7 +280,6 @@ export const updateOrderStatus = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: error.message,
         });
     }
 };

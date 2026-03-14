@@ -4,7 +4,7 @@ import { query } from '../config/db.js';
 const EASEBUZZ_KEY = process.env.EASEBUZZ_KEY;
 const EASEBUZZ_SALT = process.env.EASEBUZZ_SALT;
 const EASEBUZZ_ENV = (process.env.EASEBUZZ_ENV || 'test').toLowerCase();
-const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5174').replace(/\/$/, '');
 
 const EASEBUZZ_BASE_URL =
     EASEBUZZ_ENV === 'prod' ? 'https://pay.easebuzz.in' : 'https://testpay.easebuzz.in';
@@ -110,8 +110,14 @@ export const initiatePayment = async (req, res) => {
             });
         }
 
+        const user_id = req.user?.id;
+        if (!user_id) {
+            return res.status(401).json({
+                success: false,
+                message: 'Not authenticated',
+            });
+        }
         const {
-            user_id,
             address_id,
             items,
             total_amount,
@@ -123,10 +129,10 @@ export const initiatePayment = async (req, res) => {
             phone,
         } = req.body;
 
-        if (!user_id || !address_id || !items || !Array.isArray(items) || items.length === 0) {
+        if (!address_id || !items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: user_id, address_id, items (array)',
+                message: 'Missing required fields: address_id, items (array)',
             });
         }
         if (final_amount == null || !firstname || !email || !phone) {
@@ -140,7 +146,7 @@ export const initiatePayment = async (req, res) => {
         const amountStr = amountNum.toFixed(2);
 
         const draftData = {
-            user_id: user_id != null ? String(user_id) : null,
+            user_id: String(user_id),
             address_id: address_id != null ? String(address_id) : null,
             items,
             total_amount: Number(total_amount) || 0,

@@ -16,19 +16,18 @@ export const getReviewsByProduct = async (req, res) => {
         );
         res.status(200).json({ success: true, data: resQ.rows || [] });
     } catch (err) {
-        console.error('getReviewsByProduct:', err);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: err.message,
         });
     }
 };
 
 export const addReview = async (req, res) => {
     try {
+        const user_id = req.user?.id ?? null;
         const body = req.body || {};
-        const { product_id, user_id, reviewer_name, rating, comment, image_url } = body;
+        const { product_id, reviewer_name, rating, comment, image_url } = body;
 
         if (!product_id || !reviewer_name || rating == null || rating === '') {
             return res.status(400).json({
@@ -51,7 +50,7 @@ export const addReview = async (req, res) => {
              RETURNING *`,
             [
                 product_id,
-                user_id || null,
+                user_id,
                 String(reviewer_name).trim(),
                 r,
                 comment ? String(comment).trim() : null,
@@ -65,11 +64,9 @@ export const addReview = async (req, res) => {
             data,
         });
     } catch (err) {
-        console.error('addReview:', err);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: err.message,
         });
     }
 };
@@ -96,7 +93,8 @@ export const deleteReview = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Review not found' });
         }
 
-        if (existing.user_id != null && user_id !== existing.user_id) {
+        const authUserId = req.user?.id;
+        if (existing.user_id != null && String(authUserId) !== String(existing.user_id)) {
             return res.status(403).json({
                 success: false,
                 message: 'You can only delete your own review',
@@ -106,11 +104,9 @@ export const deleteReview = async (req, res) => {
         await query('DELETE FROM reviews WHERE id = $1', [id]);
         res.status(200).json({ success: true, message: 'Review deleted' });
     } catch (err) {
-        console.error('deleteReview:', err);
         res.status(500).json({
             success: false,
             message: 'Internal server error',
-            error: err.message,
         });
     }
 };
