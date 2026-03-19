@@ -135,6 +135,17 @@ export const initiatePayment = async (req, res) => {
                 message: 'Missing required fields: address_id, items (array)',
             });
         }
+        // Ensure address belongs to the authenticated user
+        const addrCheck = await query(
+            'SELECT id FROM addresses WHERE id = $1 AND user_id = $2 AND is_active = true',
+            [address_id, user_id],
+        );
+        if (!addrCheck.rows?.length) {
+            return res.status(403).json({
+                success: false,
+                message: 'Address not found or does not belong to you',
+            });
+        }
         if (final_amount == null || !firstname || !email || !phone) {
             return res.status(400).json({
                 success: false,

@@ -21,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
 
 // CORS: allow production client, local dev, and Easebuzz (user is redirected from Easebuzz to our callback)
@@ -57,7 +57,20 @@ function isAllowedOrigin(origin) {
     return false;
 }
 
-app.use(helmet({ contentSecurityPolicy: false }));
+// CSP: strict policy for any HTML this app might serve (e.g. future dashboard).
+// API JSON responses are not affected. If you add HTML pages, relax directives as needed.
+app.use(
+    helmet({
+        contentSecurityPolicy: {
+            directives: {
+                defaultSrc: ["'none'"],
+                frameAncestors: ["'none'"],
+                baseUri: ["'self'"],
+                formAction: ["'self'"],
+            },
+        },
+    })
+);
 app.use(compression());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -140,6 +153,15 @@ app.use((err, req, res, next) => {
         message: 'Internal server error',
         ...(!isProduction && { error: err.message || String(err) }),
     });
+});
+
+// Production: log unhandled rejections/errors so process doesn’t exit silently (e.g. on EB)
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    process.exit(1);
 });
 
 app.listen(PORT, () => {

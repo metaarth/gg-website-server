@@ -25,6 +25,17 @@ export const createOrder = async (req, res) => {
                 message: 'Missing required fields: address_id, items (array)',
             });
         }
+        // Ensure address belongs to the authenticated user
+        const addrCheck = await query(
+            'SELECT id FROM addresses WHERE id = $1 AND user_id = $2 AND is_active = true',
+            [address_id, user_id],
+        );
+        if (!addrCheck.rows?.length) {
+            return res.status(403).json({
+                success: false,
+                message: 'Address not found or does not belong to you',
+            });
+        }
         if (!payment_method) {
             return res.status(400).json({
                 success: false,
@@ -224,10 +235,18 @@ export const getOrderById = async (req, res) => {
     }
 };
 
+// Only admins can set these order statuses; customers can only set CUSTOMER_ALLOWED_ORDER_STATUSES
+const ADMIN_ONLY_ORDER_STATUSES = ['processing', 'shipped', 'delivered'];
+const CUSTOMER_ALLOWED_ORDER_STATUSES = ['cancelled'];
+// Only admins can update payment_status
+const ALLOWED_ORDER_STATUSES = [...ADMIN_ONLY_ORDER_STATUSES, ...CUSTOMER_ALLOWED_ORDER_STATUSES];
+
 export const updateOrderStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const authUserId = req.user?.id;
+        const userRole = (req.user?.role || 'user').toLowerCase();
+        const isAdmin = userRole === 'admin';
         if (!authUserId) {
             return res.status(401).json({ success: false, message: 'Not authenticated' });
         }
@@ -239,12 +258,47 @@ export const updateOrderStatus = async (req, res) => {
             });
         }
 
+        // Payment status can only be updated by admin
+        if (payment_status !== undefined && payment_status !== null && payment_status !== '') {
+            if (!isAdmin) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only admins can update payment status',
+                });
+            }
+        }
+
+        // Order status: admin can set any allowed value; customer can only set cancelled
+        if (order_status !== undefined && order_status !== null && order_status !== '') {
+            const status = String(order_status).trim().toLowerCase();
+            if (!ALLOWED_ORDER_STATUSES.includes(status)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid order_status. Allowed: ${ALLOWED_ORDER_STATUSES.join(', ')}`,
+                });
+            }
+            if (ADMIN_ONLY_ORDER_STATUSES.includes(status) && !isAdmin) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only admins can set order status to processing, shipped, or delivered',
+                });
+            }
+            if (CUSTOMER_ALLOWED_ORDER_STATUSES.includes(status) && !isAdmin) {
+                // Customer can only update their own order to cancelled
+                const orderRes = await query('SELECT id, user_id FROM orders WHERE id = $1', [id]);
+                const order = orderRes.rows[0];
+                if (!order || String(order.user_id) !== String(authUserId)) {
+                    return res.status(404).json({ success: false, message: 'Order not found' });
+                }
+            }
+        }
+
         const updates = [];
         const params = [];
         let idx = 1;
         if (order_status) {
             updates.push(`order_status = $${idx}`);
-            params.push(order_status);
+            params.push(String(order_status).trim().toLowerCase());
             idx++;
         }
         if (payment_status) {
@@ -258,9 +312,16 @@ export const updateOrderStatus = async (req, res) => {
                 message: 'Provide order_status and/or payment_status',
             });
         }
-        params.push(id, authUserId);
+        // Admin can update any order; customer can only update their own (already validated for cancelled above)
+        params.push(id);
+        if (!isAdmin) {
+            params.push(authUserId);
+        }
+        const whereClause = isAdmin
+            ? `id = $${idx}`
+            : `id = $${idx} AND user_id = $${idx + 1}`;
         const resQ = await query(
-            `UPDATE orders SET ${updates.join(', ')} WHERE id = $${idx} AND user_id = $${idx + 1} RETURNING *`,
+            `UPDATE orders SET ${updates.join(', ')} WHERE ${whereClause} RETURNING *`,
             params,
         );
         const data = resQ.rows[0];
