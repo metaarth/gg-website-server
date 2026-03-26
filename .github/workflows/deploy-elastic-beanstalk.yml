@@ -59,6 +59,36 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Validate AWS access and targets
+        run: |
+          set -e
+          echo "Checking AWS identity..."
+          aws sts get-caller-identity >/dev/null
+
+          echo "Checking S3 bucket..."
+          aws s3api head-bucket --bucket "${{ secrets.EB_DEPLOY_BUCKET }}" >/dev/null
+
+          echo "Checking Elastic Beanstalk application..."
+          APP_COUNT=$(aws elasticbeanstalk describe-applications \
+            --application-names "${APPLICATION_NAME}" \
+            --query 'length(Applications)' \
+            --output text)
+          if [ "${APP_COUNT}" != "1" ]; then
+            echo "Application not found: ${APPLICATION_NAME}"
+            exit 1
+          fi
+
+          echo "Checking Elastic Beanstalk environment..."
+          ENV_COUNT=$(aws elasticbeanstalk describe-environments \
+            --application-name "${APPLICATION_NAME}" \
+            --environment-names "${ENVIRONMENT_NAME}" \
+            --query 'length(Environments)' \
+            --output text)
+          if [ "${ENV_COUNT}" != "1" ]; then
+            echo "Environment not found: ${ENVIRONMENT_NAME}"
+            exit 1
+          fi
+
       - name: Upload bundle to S3
         run: aws s3 cp deploy.zip s3://${{ secrets.EB_DEPLOY_BUCKET }}/${{ env.S3_KEY }}
 
