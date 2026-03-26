@@ -28,14 +28,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "Missing secret: AWS_ACCESS_KEY_ID"
+            exit 1
+          fi
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "Missing secret: AWS_SECRET_ACCESS_KEY"
+            exit 1
+          fi
+          if [ -z "${{ secrets.EB_DEPLOY_BUCKET }}" ]; then
+            echo "Missing secret: EB_DEPLOY_BUCKET"
+            exit 1
+          fi
 
       - name: Create deployment bundle
         run: |
