@@ -1,0 +1,71 @@
+name: Deploy to Elastic Beanstalk
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: eb-deploy-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    env:
+      AWS_REGION: ap-south-1
+      APPLICATION_NAME: gawriganga-server
+      ENVIRONMENT_NAME: gawriganga-server-env
+      VERSION_LABEL: ${{ github.sha }}-${{ github.run_number }}
+      S3_KEY: elasticbeanstalk/${{ github.event.repository.name }}/${{ github.sha }}-${{ github.run_number }}.zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create deployment bundle
+        run: |
+          zip -r deploy.zip . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "node_modules/*" \
+            -x ".env" \
+            -x "*.log"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload bundle to S3
+        run: aws s3 cp deploy.zip s3://${{ secrets.EB_DEPLOY_BUCKET }}/${{ env.S3_KEY }}
+
+      - name: Create Elastic Beanstalk application version
+        run: |
+          aws elasticbeanstalk create-application-version \
+            --application-name "${APPLICATION_NAME}" \
+            --version-label "${VERSION_LABEL}" \
+            --source-bundle S3Bucket="${{ secrets.EB_DEPLOY_BUCKET }}",S3Key="${S3_KEY}"
+
+      - name: Deploy version to environment
+        run: |
+          aws elasticbeanstalk update-environment \
+            --environment-name "${ENVIRONMENT_NAME}" \
+            --version-label "${VERSION_LABEL}"
+

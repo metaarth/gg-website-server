@@ -26,7 +26,9 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 // CORS: allow production client, local dev, and Easebuzz (user is redirected from Easebuzz to our callback)
 const allowedOrigins = [
-    'https://gg-website-client.vercel.app',
+    'https://gawriganga.com',
+    'https://www.gawriganga.com',
+    'https://api.gawriganga.com',
     'https://testpay.easebuzz.in',
     'https://pay.easebuzz.in',
     'http://localhost:5173',
