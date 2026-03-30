@@ -15,6 +15,7 @@ export const createOrder = async (req, res) => {
             total_amount,
             discount_amount = 0,
             shipping_charges = 0,
+            blessing_charge = 0,
             payment_method,
             notes,
         } = req.body;
@@ -46,7 +47,10 @@ export const createOrder = async (req, res) => {
         const normalizedPaymentMethod =
             String(payment_method).toLowerCase() === 'cod' ? 'cod' : String(payment_method);
         const final_amount =
-            (Number(total_amount) || 0) - (Number(discount_amount) || 0) + (Number(shipping_charges) || 0);
+            (Number(total_amount) || 0) -
+            (Number(discount_amount) || 0) +
+            (Number(shipping_charges) || 0) +
+            (Number(blessing_charge) || 0);
         const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
         const todayStart = new Date().toISOString().split('T')[0];
 
@@ -68,7 +72,12 @@ export const createOrder = async (req, res) => {
             payment_method: normalizedPaymentMethod,
             payment_status: 'pending',
             order_status: 'pending',
-            notes: notes ?? null,
+            notes:
+                Number(blessing_charge) > 0
+                    ? [notes, `Special Blessing Service: +₹${Number(blessing_charge)}`]
+                        .filter(Boolean)
+                        .join(' | ')
+                    : (notes ?? null),
         };
 
         if (Number.isNaN(orderData.final_amount)) {
