@@ -5,9 +5,19 @@ const EASEBUZZ_KEY = process.env.EASEBUZZ_KEY;
 const EASEBUZZ_SALT = process.env.EASEBUZZ_SALT;
 const EASEBUZZ_ENV = (process.env.EASEBUZZ_ENV || 'test').toLowerCase();
 const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5174').replace(/\/$/, '');
+const PAYMENT_CALLBACK_BASE_URL = (process.env.PAYMENT_CALLBACK_BASE_URL || '').replace(/\/$/, '');
 
 const EASEBUZZ_BASE_URL =
     EASEBUZZ_ENV === 'prod' ? 'https://pay.easebuzz.in' : 'https://testpay.easebuzz.in';
+
+function getPublicBaseUrl(req) {
+    if (PAYMENT_CALLBACK_BASE_URL) return PAYMENT_CALLBACK_BASE_URL;
+    const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const proto = xfProto || req.protocol || 'http';
+    const host = req.get('x-forwarded-host') || req.get('host');
+    const safeProto = host && !/localhost|127\.0\.0\.1/i.test(host) ? 'https' : proto;
+    return `${safeProto}://${host}`;
+}
 
 function generatePaymentHash(data, key, salt) {
     const udf = (i) => (data[`udf${i}`] != null ? String(data[`udf${i}`]).trim() : '');
@@ -218,7 +228,7 @@ export const initiatePayment = async (req, res) => {
         const txnid = String(draft.id);
         const udf1 = txnid;
 
-        const callbackBase = `${req.protocol}://${req.get('host')}`;
+        const callbackBase = getPublicBaseUrl(req);
         const surl = `${callbackBase}/api/payment/callback`;
         const furl = surl;
 
