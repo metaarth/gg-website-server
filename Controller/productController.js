@@ -26,7 +26,7 @@ function toProductImages(imagesData) {
 // Get products by category with filters
 export const getProductsByCategory = async (req, res) => {
     try {
-        const { category, subcategory, deity, planet, rarity, search } = req.query;
+        const { category, subcategory, deity, planet, rarity, search, featured } = req.query;
 
         let categoryId = null;
         if (category) {
@@ -43,7 +43,7 @@ export const getProductsByCategory = async (req, res) => {
         let sql = `
             SELECT id, name, description, short_description, price, stock_quantity,
                    category_id, subcategory, deity, benefits, planet, rarity, status, created_at,
-                   discount_percent
+                   discount_percent, is_featured
             FROM products
             WHERE status = 'active'
         `;
@@ -56,7 +56,7 @@ export const getProductsByCategory = async (req, res) => {
             idx++;
         }
         if (subcategory && subcategory !== 'all') {
-            sql += ` AND subcategory = $${idx}`;
+            sql += ` AND LOWER(TRIM(subcategory)) = LOWER(TRIM($${idx}::text))`;
             params.push(subcategory);
             idx++;
         }
@@ -78,6 +78,12 @@ export const getProductsByCategory = async (req, res) => {
         if (search) {
             sql += ` AND (name ILIKE $${idx} OR description ILIKE $${idx})`;
             params.push(`%${search}%`);
+            idx++;
+        }
+        if (featured !== undefined) {
+            const featuredValue = String(featured).toLowerCase() === 'true';
+            sql += ` AND is_featured = $${idx}`;
+            params.push(featuredValue);
             idx++;
         }
 
@@ -116,6 +122,7 @@ export const getProductsByCategory = async (req, res) => {
             planet: product.planet || '',
             rarity: product.rarity || '',
             discount_percent: pickDiscountPercent(product),
+            is_featured: product.is_featured ?? false,
             images: productImagesMap[product.id] || [],
         }));
 
@@ -189,7 +196,7 @@ export const getProductById = async (req, res) => {
         const productRes = await query(
             `SELECT id, name, description, short_description, price, stock_quantity,
                     category_id, subcategory, deity, benefits, planet, rarity, status, created_at,
-                    discount_percent
+                    discount_percent, is_featured
              FROM products WHERE id = $1 AND status = 'active'`,
             [id],
         );
@@ -229,6 +236,7 @@ export const getProductById = async (req, res) => {
                 planet: product.planet || '',
                 rarity: product.rarity || '',
                 discount_percent: pickDiscountPercent(product),
+                is_featured: product.is_featured ?? false,
                 images,
             },
         });
