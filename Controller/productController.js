@@ -56,7 +56,7 @@ export const getProductsByCategory = async (req, res) => {
             idx++;
         }
         if (subcategory && subcategory !== 'all') {
-            sql += ` AND subcategory = $${idx}`;
+            sql += ` AND LOWER(TRIM(subcategory)) = LOWER(TRIM($${idx}::text))`;
             params.push(subcategory);
             idx++;
         }
