@@ -26,7 +26,7 @@ function toProductImages(imagesData) {
 // Get products by category with filters
 export const getProductsByCategory = async (req, res) => {
     try {
-        const { category, subcategory, deity, planet, rarity, search, featured } = req.query;
+        const { category, subcategory, deity, planet, rarity, search, featured, purpose } = req.query;
 
         let categoryId = null;
         if (category) {
@@ -42,7 +42,7 @@ export const getProductsByCategory = async (req, res) => {
 
         let sql = `
             SELECT id, slug, name, description, short_description, price, stock_quantity,
-                   category_id, subcategory, deity, benefits, planet, rarity, status, created_at,
+                   category_id, subcategory, deity, benefits, purposes, planet, rarity, status, created_at,
                    discount_percent, is_featured
             FROM products
             WHERE status = 'active'
@@ -78,6 +78,15 @@ export const getProductsByCategory = async (req, res) => {
         if (search) {
             sql += ` AND (name ILIKE $${idx} OR description ILIKE $${idx})`;
             params.push(`%${search}%`);
+            idx++;
+        }
+        if (purpose && purpose !== 'all') {
+            sql += ` AND EXISTS (
+                SELECT 1
+                FROM unnest(COALESCE(purposes, ARRAY[]::text[])) AS p(token)
+                WHERE LOWER(TRIM(p.token)) = LOWER(TRIM($${idx}::text))
+            )`;
+            params.push(String(purpose).trim());
             idx++;
         }
         if (featured !== undefined) {
@@ -120,6 +129,7 @@ export const getProductsByCategory = async (req, res) => {
             subcategory: product.subcategory || '',
             deity: product.deity || '',
             benefits: product.benefits || '',
+            purposes: Array.isArray(product.purposes) ? product.purposes : [],
             planet: product.planet || '',
             rarity: product.rarity || '',
             discount_percent: pickDiscountPercent(product),
@@ -155,13 +165,13 @@ export const getFilterOptions = async (req, res) => {
         if (catRes.rows.length === 0) {
             return res.status(200).json({
                 success: true,
-                data: { subcategories: [], deities: [], planets: [], rarities: [] },
+                data: { subcategories: [], deities: [], planets: [], rarities: [], purposes: [] },
             });
         }
 
         const catId = catRes.rows[0].id;
         const prodsRes = await query(
-            'SELECT subcategory, deity, planet, rarity FROM products WHERE category_id = $1 AND status = $2',
+            'SELECT subcategory, deity, planet, rarity, purposes FROM products WHERE category_id = $1 AND status = $2',
             [catId, 'active'],
         );
         const products = prodsRes.rows || [];
@@ -170,10 +180,18 @@ export const getFilterOptions = async (req, res) => {
         const deities = [...new Set(products.map((p) => p.deity).filter(Boolean))].sort();
         const planets = [...new Set(products.map((p) => p.planet).filter(Boolean))].sort();
         const rarities = [...new Set(products.map((p) => p.rarity).filter(Boolean))].sort();
+        const purposes = [
+            ...new Set(
+                products
+                    .flatMap((p) => (Array.isArray(p.purposes) ? p.purposes : []))
+                    .map((value) => String(value).trim())
+                    .filter(Boolean),
+            ),
+        ].sort();
 
         res.status(200).json({
             success: true,
-            data: { subcategories, deities, planets, rarities },
+            data: { subcategories, deities, planets, rarities, purposes },
         });
     } catch (error) {
         res.status(500).json({
@@ -196,7 +214,7 @@ export const getProductBySlug = async (req, res) => {
 
         const productRes = await query(
             `SELECT id, slug, name, description, short_description, price, stock_quantity,
-                    category_id, subcategory, deity, benefits, planet, rarity, status, created_at,
+                    category_id, subcategory, deity, benefits, purposes, planet, rarity, status, created_at,
                     discount_percent, is_featured
              FROM products WHERE slug = $1 AND status = 'active'`,
             [slug],
@@ -235,6 +253,7 @@ export const getProductBySlug = async (req, res) => {
                 subcategory: product.subcategory || '',
                 deity: product.deity || '',
                 benefits: product.benefits || '',
+                purposes: Array.isArray(product.purposes) ? product.purposes : [],
                 planet: product.planet || '',
                 rarity: product.rarity || '',
                 discount_percent: pickDiscountPercent(product),
@@ -244,6 +263,51 @@ export const getProductBySlug = async (req, res) => {
         });
     } catch (error) {
         console.error('[getProductBySlug]', error?.message || error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+        });
+    }
+};
+
+// Get unique purposes (for homepage shop by purpose section)
+export const getPurposes = async (_req, res) => {
+    try {
+        const purposesRes = await query(
+            `SELECT DISTINCT TRIM(purpose_token) AS purpose
+             FROM products
+             CROSS JOIN LATERAL unnest(COALESCE(purposes, ARRAY[]::text[])) AS purpose_token
+             WHERE status = 'active'
+               AND TRIM(purpose_token) <> ''
+             ORDER BY purpose ASC`,
+            [],
+        );
+
+        const rawPurposes = (purposesRes.rows || [])
+            .map((row) => row.purpose)
+            .filter(Boolean);
+
+        const seen = new Set();
+        const purposes = [];
+
+        rawPurposes.forEach((part) => {
+            const normalized = String(part).trim();
+            if (!normalized) return;
+            const key = normalized.toLowerCase();
+            if (!seen.has(key)) {
+                seen.add(key);
+                purposes.push(normalized);
+            }
+        });
+
+        purposes.sort((a, b) => a.localeCompare(b));
+
+        res.status(200).json({
+            success: true,
+            data: purposes,
+        });
+    } catch (error) {
+        console.error('[getPurposes]', error?.message || error);
         res.status(500).json({
             success: false,
             error: 'Internal server error',
