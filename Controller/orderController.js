@@ -1,6 +1,7 @@
 import { query } from '../config/db.js';
 import pool from '../config/db.js';
 import { ensureCashbackSchema } from './cashbackController.js';
+import { evaluateCouponForCart } from './couponController.js';
 
 export const createOrder = async (req, res) => {
     const client = await pool.connect();
@@ -17,6 +18,7 @@ export const createOrder = async (req, res) => {
             items,
             total_amount,
             discount_amount = 0,
+            coupon_code = null,
             shipping_charges = 0,
             blessing_charge = 0,
             payment_method,
@@ -51,9 +53,28 @@ export const createOrder = async (req, res) => {
 
         const normalizedPaymentMethod =
             String(payment_method).toLowerCase() === 'cod' ? 'cod' : String(payment_method);
+        let appliedCoupon = null;
+        let couponDiscountAmount = 0;
+        if (coupon_code) {
+            const couponEval = await evaluateCouponForCart({
+                code: coupon_code,
+                items,
+                userId: user_id,
+            });
+            if (!couponEval.ok) {
+                return res.status(couponEval.status || 400).json({
+                    success: false,
+                    message: couponEval.message || 'Invalid coupon',
+                });
+            }
+            appliedCoupon = couponEval.coupon;
+            couponDiscountAmount = Number(couponEval.discount_amount || 0);
+        }
+
+        const effectiveDiscount = Math.max(Number(discount_amount) || 0, couponDiscountAmount);
         const computedFinalAmount =
             (Number(total_amount) || 0) -
-            (Number(discount_amount) || 0) +
+            effectiveDiscount +
             (Number(shipping_charges) || 0) +
             (Number(blessing_charge) || 0);
         const requestedWalletAmount = use_wallet ? Math.max(0, Number(wallet_amount_to_use) || 0) : 0;
@@ -95,7 +116,7 @@ export const createOrder = async (req, res) => {
             order_number: orderNumber,
             address_id,
             total_amount: Number(total_amount) || 0,
-            discount_amount: Number(discount_amount) || 0,
+            discount_amount: effectiveDiscount,
             shipping_charges: Number(shipping_charges) || 0,
             final_amount,
             payment_method:
@@ -107,7 +128,9 @@ export const createOrder = async (req, res) => {
                     ? [notes, `Special Blessing Service: +₹${Number(blessing_charge)}`]
                         .filter(Boolean)
                         .join(' | ')
-                    : (notes ?? null),
+                    : [notes, appliedCoupon ? `Coupon Applied: ${appliedCoupon.code}` : null]
+                        .filter(Boolean)
+                        .join(' | ') || null,
         };
 
         if (Number.isNaN(orderData.final_amount)) {
@@ -176,6 +199,14 @@ export const createOrder = async (req, res) => {
             );
         }
 
+        if (appliedCoupon) {
+            await client.query(
+                `INSERT INTO coupon_usages (coupon_id, user_id, order_id, discount_amount)
+                 VALUES ($1, $2, $3, $4)`,
+                [appliedCoupon.id, user_id, order.id, effectiveDiscount],
+            );
+        }
+
         const itemsRes = await client.query('SELECT * FROM order_items WHERE order_id = $1', [order.id]);
         const addrRes = await client.query('SELECT * FROM addresses WHERE id = $1', [order.address_id]);
         await client.query('COMMIT');
@@ -185,6 +216,7 @@ export const createOrder = async (req, res) => {
             order_items: itemsRes.rows || [],
             wallet_amount_used: walletAmountUsed,
             payable_after_wallet: final_amount,
+            coupon_code: appliedCoupon?.code || null,
         };
 
         res.status(201).json({
