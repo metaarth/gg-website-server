@@ -23,7 +23,7 @@ function meetsMinimumOrder(subtotal, minimum) {
   return toPaise(sub) >= toPaise(min);
 }
 
-async function buildCartContext(items) {
+export async function buildCartContext(items) {
   const normalizedItems = Array.isArray(items)
     ? items
         .map((item) => ({

@@ -26,6 +26,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
 
+if (isProduction) {
+  app.set('trust proxy', 1);
+}
+
 // CORS: allow production client, local dev, and Easebuzz (user is redirected from Easebuzz to our callback)
 const allowedOrigins = [
     'https://gawriganga.com',
@@ -84,16 +88,52 @@ const apiLimiter = rateLimit({
   max: 300,
   message: { success: false, message: 'Too many requests' },
 });
-const authLimiter = rateLimit({
+
+/** OTP send: per-IP (separate from verify so wrong OTP tries don’t block resend SMS). */
+const otpSendIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many OTP send requests from this network. Try again in a few minutes.' },
+});
+
+/** Stricter cap per Indian mobile (body.phone_number) */
+const otpSendPerPhoneLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many OTP requests for this number. Try again later.' },
+  keyGenerator: (req) => {
+    const raw = req.body?.phone_number;
+    const digits = String(raw || '').replace(/\D/g, '');
+    const n = digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+    if (/^[6-9]\d{9}$/.test(n)) return `otp-phone:${n}`;
+    return `otp-ip:${req.ip || 'unknown'}`;
+  },
+});
+
+/** OTP verify — own bucket so it doesn’t compete with send SMS limit. */
+const otpVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many verification attempts. Try again later.' },
+});
+
+const paymentInitLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
   message: { success: false, message: 'Too many attempts' },
 });
 
 app.use('/api/', apiLimiter);
-app.use('/api/auth/login', authLimiter);
-app.use('/api/auth/register', authLimiter);
-app.use('/api/payment/initiate', authLimiter);
+app.use('/api/auth/otp/send', otpSendPerPhoneLimiter);
+app.use('/api/auth/otp/send', otpSendIpLimiter);
+app.use('/api/auth/otp/verify', otpVerifyLimiter);
+app.use('/api/payment/initiate', paymentInitLimiter);
 
 // Payment callback must be registered BEFORE CORS so Easebuzz redirect is never blocked
 app.post('/api/payment/callback', paymentCallback);
@@ -124,8 +164,17 @@ const setCorsIfAllowed = (req, res) => {
 // Health check (for Render / load balancers)
 app.get('/api/health', (req, res) => res.status(200).json({ ok: true }));
 
-// Mail status (to verify SMTP env on production; does not test actual send)
-app.get('/api/health/mail', (req, res) => res.status(200).json({ mailConfigured: mailConfigured }));
+// Mail status — in production require ?secret=HEALTH_MAIL_SECRET (or omit route)
+app.get('/api/health/mail', (req, res) => {
+  const secret = process.env.HEALTH_MAIL_SECRET;
+  if (isProduction && secret) {
+    const q = req.query?.secret;
+    if (q !== secret) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+  }
+  return res.status(200).json({ mailConfigured: mailConfigured });
+});
 
 // Routes
 app.use('/api/auth', authRoutes);

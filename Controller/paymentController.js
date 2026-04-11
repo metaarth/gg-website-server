@@ -1,5 +1,6 @@
 import sha512 from 'js-sha512';
 import pool, { query } from '../config/db.js';
+import { validateCheckoutTotals, amountsMatch } from '../utils/checkoutPricing.js';
 
 const EASEBUZZ_KEY = process.env.EASEBUZZ_KEY;
 const EASEBUZZ_SALT = process.env.EASEBUZZ_SALT;
@@ -52,7 +53,18 @@ function verifyCallbackHash(body, salt) {
     return sha512.sha512(hashstring);
 }
 
-async function createOrderFromDraft(draft) {
+async function findOrderByEasebuzzTxn(txnKey) {
+    if (txnKey == null || String(txnKey).trim() === '') return null;
+    try {
+        const r = await query('SELECT id FROM orders WHERE easebuzz_txnid = $1 LIMIT 1', [String(txnKey)]);
+        return r.rows[0] || null;
+    } catch (e) {
+        if (e.code === '42703') return null;
+        throw e;
+    }
+}
+
+async function createOrderFromDraft(draft, easebuzzTxnId = null) {
     const items = draft.items && Array.isArray(draft.items) ? draft.items : [];
     if (items.length === 0) return { order: null, error: 'No items in draft' };
 
@@ -102,24 +114,60 @@ async function createOrderFromDraft(draft) {
         const count = parseInt(countRes.rows[0]?.c || 0, 10);
         const orderNumber = `GG-${today}-${String(count + 1).padStart(5, '0')}`;
 
-        const orderRes = await client.query(
-            `INSERT INTO orders (user_id, order_number, address_id, total_amount, discount_amount, shipping_charges, final_amount, payment_method, payment_status, order_status, notes)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             RETURNING *`,
-            [
-                draft.user_id,
-                orderNumber,
-                draft.address_id,
-                Number(draft.total_amount) || 0,
-                Number(draft.discount_amount) || 0,
-                Number(draft.shipping_charges) || 0,
-                Number(draft.final_amount),
-                'easebuzz',
-                'paid',
-                'pending',
-                null,
-            ],
-        );
+        const orderParams = [
+            draft.user_id,
+            orderNumber,
+            draft.address_id,
+            Number(draft.total_amount) || 0,
+            Number(draft.discount_amount) || 0,
+            Number(draft.shipping_charges) || 0,
+            Number(draft.final_amount),
+            'easebuzz',
+            'paid',
+            'pending',
+            null,
+        ];
+
+        let orderRes;
+        const txn = easebuzzTxnId != null && String(easebuzzTxnId).trim() !== '' ? String(easebuzzTxnId) : null;
+        if (txn) {
+            try {
+                orderRes = await client.query(
+                    `INSERT INTO orders (user_id, order_number, address_id, total_amount, discount_amount, shipping_charges, final_amount, payment_method, payment_status, order_status, notes, easebuzz_txnid)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                     RETURNING *`,
+                    [...orderParams, txn],
+                );
+            } catch (insertErr) {
+                if (insertErr.code === '42703' && String(insertErr.message || '').includes('easebuzz_txnid')) {
+                    orderRes = await client.query(
+                        `INSERT INTO orders (user_id, order_number, address_id, total_amount, discount_amount, shipping_charges, final_amount, payment_method, payment_status, order_status, notes)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                         RETURNING *`,
+                        orderParams,
+                    );
+                } else if (insertErr.code === '23505') {
+                    await client.query('ROLLBACK');
+                    const existing = await query('SELECT * FROM orders WHERE easebuzz_txnid = $1 LIMIT 1', [txn]).catch(() => ({
+                        rows: [],
+                    }));
+                    if (existing.rows?.[0]) {
+                        return { order: existing.rows[0], error: null };
+                    }
+                    return { order: null, error: insertErr.message || 'Duplicate payment reference' };
+                } else {
+                    throw insertErr;
+                }
+            }
+        } else {
+            orderRes = await client.query(
+                `INSERT INTO orders (user_id, order_number, address_id, total_amount, discount_amount, shipping_charges, final_amount, payment_method, payment_status, order_status, notes)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 RETURNING *`,
+                orderParams,
+            );
+        }
+
         const order = orderRes.rows[0];
         if (!order) return { order: null, error: 'Insert order failed' };
 
@@ -187,6 +235,7 @@ export const initiatePayment = async (req, res) => {
             items,
             total_amount,
             discount_amount = 0,
+            coupon_code = null,
             shipping_charges = 0,
             blessing_charge = 0,
             final_amount,
@@ -221,20 +270,55 @@ export const initiatePayment = async (req, res) => {
             });
         }
 
-        const amountNum = Number(final_amount);
+        const pricing = await validateCheckoutTotals({
+            items,
+            userId: user_id,
+            coupon_code,
+            clientTotalAmount: total_amount,
+            clientDiscountAmount: discount_amount,
+            shipping_charges,
+            blessing_charge,
+        });
+        if (!pricing.ok) {
+            return res.status(pricing.status || 400).json({
+                success: false,
+                message: pricing.message || 'Invalid cart or pricing',
+            });
+        }
+
+        let walletDeduction = 0;
+        const requestedWallet = use_wallet ? Math.max(0, Number(wallet_amount_to_use) || 0) : 0;
+        if (requestedWallet > 0) {
+            const wRes = await query(
+                'SELECT COALESCE(cashback_amount, 0) AS balance FROM users WHERE id = $1',
+                [user_id],
+            );
+            const bal = Number(wRes.rows[0]?.balance || 0);
+            walletDeduction = Math.min(requestedWallet, bal, pricing.computedPreWallet);
+        }
+
+        const serverFinalAmount = Math.max(0, pricing.computedPreWallet - walletDeduction);
+        if (!amountsMatch(serverFinalAmount, final_amount)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Order total does not match. Please refresh and try again.',
+            });
+        }
+
+        const amountNum = serverFinalAmount;
         const amountStr = amountNum.toFixed(2);
 
         const draftData = {
             user_id: String(user_id),
             address_id: address_id != null ? String(address_id) : null,
             items,
-            total_amount: Number(total_amount) || 0,
-            discount_amount: Number(discount_amount) || 0,
-            shipping_charges: Number(shipping_charges) || 0,
+            total_amount: pricing.serverSubtotal,
+            discount_amount: pricing.effectiveDiscount,
+            shipping_charges: pricing.serverShipping,
             blessing_charge: Number(blessing_charge) || 0,
             final_amount: amountNum,
-            use_wallet: !!use_wallet,
-            wallet_amount_to_use: Math.max(0, Number(wallet_amount_to_use) || 0),
+            use_wallet: walletDeduction > 0,
+            wallet_amount_to_use: walletDeduction,
             firstname: String(firstname).trim(),
             email: String(email).trim(),
             phone: String(phone).replace(/\D/g, '').slice(0, 10) || '0000000000',
@@ -380,6 +464,12 @@ export const paymentCallback = async (req, res) => {
                 return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=no_draft`);
             }
 
+            const txnKey = String(draftId);
+            const alreadyPaid = await findOrderByEasebuzzTxn(txnKey);
+            if (alreadyPaid?.id) {
+                return res.redirect(302, `${FRONTEND_URL}/order-success?order_id=${alreadyPaid.id}`);
+            }
+
             const draftRes = await query(
                 'SELECT * FROM order_drafts WHERE id = $1',
                 [draftId],
@@ -387,6 +477,10 @@ export const paymentCallback = async (req, res) => {
             const draft = draftRes.rows[0];
 
             if (!draft) {
+                const retryOrder = await findOrderByEasebuzzTxn(txnKey);
+                if (retryOrder?.id) {
+                    return res.redirect(302, `${FRONTEND_URL}/order-success?order_id=${retryOrder.id}`);
+                }
                 console.error('paymentCallback: draft not found', { draftId });
                 return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=draft_not_found`);
             }
@@ -407,7 +501,7 @@ export const paymentCallback = async (req, res) => {
                 ),
             };
 
-            const { order, error: createError } = await createOrderFromDraft(draftWithItems);
+            const { order, error: createError } = await createOrderFromDraft(draftWithItems, txnKey);
             if (createError || !order) {
                 console.error('paymentCallback: createOrderFromDraft failed', createError || 'no order');
                 await query(

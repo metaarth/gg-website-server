@@ -1,7 +1,7 @@
 import { query } from '../config/db.js';
 import pool from '../config/db.js';
 import { ensureCashbackSchema } from './cashbackController.js';
-import { evaluateCouponForCart } from './couponController.js';
+import { validateCheckoutTotals, amountsMatch } from '../utils/checkoutPricing.js';
 
 export const createOrder = async (req, res) => {
     const client = await pool.connect();
@@ -25,6 +25,7 @@ export const createOrder = async (req, res) => {
             notes,
             use_wallet = false,
             wallet_amount_to_use = 0,
+            final_amount: clientFinalAmount = null,
         } = req.body;
 
         if (!address_id || !items || !Array.isArray(items) || items.length === 0) {
@@ -53,30 +54,25 @@ export const createOrder = async (req, res) => {
 
         const normalizedPaymentMethod =
             String(payment_method).toLowerCase() === 'cod' ? 'cod' : String(payment_method);
-        let appliedCoupon = null;
-        let couponDiscountAmount = 0;
-        if (coupon_code) {
-            const couponEval = await evaluateCouponForCart({
-                code: coupon_code,
-                items,
-                userId: user_id,
+
+        const pricing = await validateCheckoutTotals({
+            items,
+            userId: user_id,
+            coupon_code,
+            clientTotalAmount: total_amount,
+            clientDiscountAmount: discount_amount,
+            shipping_charges,
+            blessing_charge,
+        });
+        if (!pricing.ok) {
+            return res.status(pricing.status || 400).json({
+                success: false,
+                message: pricing.message || 'Invalid cart or pricing',
             });
-            if (!couponEval.ok) {
-                return res.status(couponEval.status || 400).json({
-                    success: false,
-                    message: couponEval.message || 'Invalid coupon',
-                });
-            }
-            appliedCoupon = couponEval.coupon;
-            couponDiscountAmount = Number(couponEval.discount_amount || 0);
         }
 
-        const effectiveDiscount = Math.max(Number(discount_amount) || 0, couponDiscountAmount);
-        const computedFinalAmount =
-            (Number(total_amount) || 0) -
-            effectiveDiscount +
-            (Number(shipping_charges) || 0) +
-            (Number(blessing_charge) || 0);
+        const { effectiveDiscount, appliedCoupon, computedPreWallet } = pricing;
+        const computedFinalAmount = computedPreWallet;
         const requestedWalletAmount = use_wallet ? Math.max(0, Number(wallet_amount_to_use) || 0) : 0;
         const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
         const todayStart = new Date().toISOString().split('T')[0];
@@ -111,13 +107,25 @@ export const createOrder = async (req, res) => {
 
         const final_amount = Math.max(0, computedFinalAmount - walletAmountUsed);
 
+        if (
+            clientFinalAmount != null &&
+            clientFinalAmount !== '' &&
+            !amountsMatch(final_amount, clientFinalAmount)
+        ) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'Order total does not match. Please refresh and try again.',
+            });
+        }
+
         const orderData = {
             user_id,
             order_number: orderNumber,
             address_id,
-            total_amount: Number(total_amount) || 0,
+            total_amount: pricing.serverSubtotal,
             discount_amount: effectiveDiscount,
-            shipping_charges: Number(shipping_charges) || 0,
+            shipping_charges: pricing.serverShipping,
             final_amount,
             payment_method:
                 final_amount <= 0 && walletAmountUsed > 0 ? 'wallet' : normalizedPaymentMethod,
