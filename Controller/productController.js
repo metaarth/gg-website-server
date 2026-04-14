@@ -11,16 +11,80 @@ function pickDiscountPercent(row) {
     return n;
 }
 
-function toProductImages(imagesData) {
-    const out = [];
-    if (!imagesData) return out;
-    for (const key of ['image1', 'image2', 'image3', 'image4']) {
-        const v = imagesData[key];
-        if (v != null && String(v).trim() !== '' && String(v).toLowerCase() !== 'null') {
-            out.push(getS3PublicUrl(v) || v);
+function pushImageFromValue(out, value) {
+    if (value == null) return;
+
+    // Array/jsonb array
+    if (Array.isArray(value)) {
+        value.forEach((v) => pushImageFromValue(out, v));
+        return;
+    }
+
+    // Json object like { url }, { key }, { path }
+    if (typeof value === 'object') {
+        const nested = value.url ?? value.image_url ?? value.key ?? value.path ?? value.src ?? null;
+        if (nested != null) pushImageFromValue(out, nested);
+        return;
+    }
+
+    const raw = String(value).trim();
+    if (!raw || raw.toLowerCase() === 'null') return;
+
+    // JSON string array/object
+    if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
+        try {
+            const parsed = JSON.parse(raw);
+            pushImageFromValue(out, parsed);
+            return;
+        } catch (_err) {
+            // Fall through and treat as plain string
         }
     }
-    return out;
+
+    // Comma-separated list
+    if (raw.includes(',')) {
+        raw
+            .split(',')
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .forEach((part) => pushImageFromValue(out, part));
+        return;
+    }
+
+    out.push(getS3PublicUrl(raw) || raw);
+}
+
+function toProductImages(imagesData) {
+    if (!imagesData || typeof imagesData !== 'object') return [];
+
+    // Explicit legacy schema support: image1..image8
+    const explicitLegacyKeys = ['image1', 'image2', 'image3', 'image4', 'image5', 'image6', 'image7', 'image8'];
+
+    const keys = Object.keys(imagesData);
+    const orderedNumericImageKeys = keys
+        .filter((key) => /^image[_-]?\d+$/i.test(key))
+        .sort((a, b) => {
+            const aNum = Number(a.replace(/\D+/g, '')) || 0;
+            const bNum = Number(b.replace(/\D+/g, '')) || 0;
+            return aNum - bNum;
+        });
+
+    // Also support common alternate column names from legacy schemas.
+    const fuzzyKeys = keys.filter((key) =>
+        /(^|_)(image|img|photo|pic|thumbnail|banner|url|path|file)(_|$)/i.test(key),
+    );
+
+    const candidateKeys = [
+        ...explicitLegacyKeys.filter((k) => Object.prototype.hasOwnProperty.call(imagesData, k)),
+        ...orderedNumericImageKeys,
+        ...fuzzyKeys.filter((k) => !orderedNumericImageKeys.includes(k)),
+    ];
+
+    const out = [];
+    candidateKeys.forEach((key) => pushImageFromValue(out, imagesData[key]));
+
+    // Preserve order, remove duplicates.
+    return [...new Set(out)];
 }
 
 // Get products by category with filters
@@ -228,8 +292,7 @@ export const getProductBySlug = async (req, res) => {
             'SELECT * FROM product_images WHERE product_id = $1',
             [product.id],
         );
-        let images = [];
-        if (imgRes.rows[0]) images = toProductImages(imgRes.rows[0]);
+        const images = (imgRes.rows || []).flatMap((row) => toProductImages(row));
 
         let categoryName = '';
         if (product.category_id) {
