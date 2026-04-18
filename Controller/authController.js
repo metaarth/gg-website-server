@@ -27,7 +27,7 @@ const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 5);
 const OTP_LENGTH = Number(process.env.OTP_LENGTH || 6);
 const FAST2SMS_URL = 'https://www.fast2sms.com/dev/bulkV2';
 const FAST2SMS_ROUTE = String(process.env.FAST2SMS_ROUTE || 'otp').trim().toLowerCase();
-const DEMO_PHONE_NUMBER = String(process.env.DEMO_PHONE_NUMBER || '9999999999').trim();
+const DEMO_PHONE_NUMBER = String(process.env.DEMO_PHONE_NUMBER || '9988776655').trim();
 const DEMO_OTP = String(process.env.DEMO_OTP || '123456').trim();
 /** First `{#}` in templates like `hi {#}, your OTP is {#}` — literal word (e.g. User), not the customer name */
 const DLT_FIRST_HASH_GREETING = String(process.env.FAST2SMS_DLT_GREETING || 'User').trim() || 'User';
