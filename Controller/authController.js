@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../config/db.js';
+import { queueNewAccountNotification } from '../utils/adminNotification.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
@@ -511,6 +512,10 @@ export const verifyPhoneOtp = async (req, res) => {
 
     const user = await createOrFetchPhoneUser(phoneNumber, fullNameForUser);
     const token = signToken(user);
+
+    if (isNewPhoneUser && isSignupFlow) {
+      queueNewAccountNotification(user);
+    }
 
     return res.json({
       success: true,

@@ -1,6 +1,7 @@
 import sha512 from 'js-sha512';
 import pool, { query } from '../config/db.js';
 import { validateCheckoutTotals, amountsMatch } from '../utils/checkoutPricing.js';
+import { queueNewOrderNotification } from '../utils/adminNotification.js';
 
 const EASEBUZZ_KEY = process.env.EASEBUZZ_KEY;
 const EASEBUZZ_SALT = process.env.EASEBUZZ_SALT;
@@ -204,6 +205,7 @@ async function createOrderFromDraft(draft, easebuzzTxnId = null) {
         }
 
         await client.query('COMMIT');
+        queueNewOrderNotification(order);
         return { order, error: null };
     } catch (err) {
         await client.query('ROLLBACK');

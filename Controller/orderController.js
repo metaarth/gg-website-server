@@ -2,6 +2,7 @@ import { query } from '../config/db.js';
 import pool from '../config/db.js';
 import { ensureCashbackSchema } from './cashbackController.js';
 import { validateCheckoutTotals, amountsMatch } from '../utils/checkoutPricing.js';
+import { queueNewOrderNotification } from '../utils/adminNotification.js';
 
 export const createOrder = async (req, res) => {
     const client = await pool.connect();
@@ -218,6 +219,7 @@ export const createOrder = async (req, res) => {
         const itemsRes = await client.query('SELECT * FROM order_items WHERE order_id = $1', [order.id]);
         const addrRes = await client.query('SELECT * FROM addresses WHERE id = $1', [order.address_id]);
         await client.query('COMMIT');
+        queueNewOrderNotification(order);
         const responseData = {
             ...order,
             addresses: addrRes.rows[0] || null,
