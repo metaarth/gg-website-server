@@ -65,6 +65,22 @@ async function findOrderByEasebuzzTxn(txnKey) {
     }
 }
 
+async function markOrderDraftFailed(draftId) {
+    if (!draftId) return;
+    try {
+        await query(
+            "UPDATE order_drafts SET status = 'failed' WHERE id = $1",
+            [draftId],
+        );
+    } catch (err) {
+        // Older schema may not have `status` column; do not break callback flow for this.
+        if (err?.code === '42703' && String(err?.message || '').includes('status')) {
+            return;
+        }
+        throw err;
+    }
+}
+
 async function createOrderFromDraft(draft, easebuzzTxnId = null) {
     const items = draft.items && Array.isArray(draft.items) ? draft.items : [];
     if (items.length === 0) return { order: null, error: 'No items in draft' };
@@ -506,10 +522,7 @@ export const paymentCallback = async (req, res) => {
             const { order, error: createError } = await createOrderFromDraft(draftWithItems, txnKey);
             if (createError || !order) {
                 console.error('paymentCallback: createOrderFromDraft failed', createError || 'no order');
-                await query(
-                    "UPDATE order_drafts SET status = 'failed' WHERE id = $1",
-                    [draftId],
-                );
+                await markOrderDraftFailed(draftId);
                 return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=order_create_failed`);
             }
 
@@ -521,10 +534,7 @@ export const paymentCallback = async (req, res) => {
 
         // Payment failed: keep draft in order_drafts and mark as failed (only failed/pending stay in order_drafts)
         if (draftId) {
-            await query(
-                "UPDATE order_drafts SET status = 'failed' WHERE id = $1",
-                [draftId],
-            ).catch(() => {});
+            await markOrderDraftFailed(draftId).catch(() => {});
         }
         return res.redirect(
             302,
