@@ -19,6 +19,7 @@ import cashbackRoutes from './Routes/cashbackRoutes.js';
 import couponRoutes from './Routes/couponRoutes.js';
 import blogRoutes from './Routes/blogRoutes.js';
 import preorderRoutes from './Routes/preorderRoutes.js';
+import contactRoutes from './Routes/contactRoutes.js';
 import { isConfigured as mailConfigured } from './config/mailer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -191,6 +192,7 @@ app.use('/api', cashbackRoutes);
 app.use('/api/coupons', couponRoutes);
 app.use('/api/blogs', blogRoutes);
 app.use('/api/preorders', preorderRoutes);
+app.use('/api/contact', contactRoutes);
 
 // Error handling for undefined API routes
 app.use((req, res, next) => {
