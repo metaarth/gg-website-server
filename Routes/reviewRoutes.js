@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { authenticate } from '../Middleware/authMiddleware.js';
+import { authenticate, optionalAuthenticate } from '../Middleware/authMiddleware.js';
 import {
     getReviewsByProduct,
     addReview,
@@ -39,7 +39,7 @@ const uploadReviewImageMiddleware = (req, res, next) => {
     });
 };
 
-router.get('/product/:productId', getReviewsByProduct);
+router.get('/product/:productId', optionalAuthenticate, getReviewsByProduct);
 router.post('/upload-image', authenticate, uploadReviewImageMiddleware, uploadReviewImage);
 router.post('/', authenticate, addReview);
 router.delete('/:id', authenticate, deleteReview);

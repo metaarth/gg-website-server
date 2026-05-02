@@ -134,10 +134,27 @@ export const getReviewsByProduct = async (req, res) => {
             });
         }
 
-        const resQ = await query(
-            'SELECT id, product_id, user_id, reviewer_name, rating, comment, image_url, verified, created_at FROM reviews WHERE product_id = $1 ORDER BY created_at DESC',
-            [resolvedProductId],
-        );
+        const authUserUuid = await resolveReviewUserId(req.user?.id);
+        const selectCols =
+            'id, product_id, user_id, reviewer_name, rating, comment, image_url, verified, created_at';
+
+        let resQ;
+        if (authUserUuid) {
+            resQ = await query(
+                `SELECT ${selectCols} FROM reviews
+                 WHERE product_id = $1
+                   AND (verified = true OR (user_id IS NOT NULL AND user_id = $2 AND verified = false))
+                 ORDER BY created_at DESC`,
+                [resolvedProductId, authUserUuid],
+            );
+        } else {
+            resQ = await query(
+                `SELECT ${selectCols} FROM reviews
+                 WHERE product_id = $1 AND verified = true
+                 ORDER BY created_at DESC`,
+                [resolvedProductId],
+            );
+        }
         res.status(200).json({ success: true, data: resQ.rows || [] });
     } catch (err) {
         res.status(500).json({
@@ -193,7 +210,7 @@ export const addReview = async (req, res) => {
         const data = resQ.rows[0];
         res.status(201).json({
             success: true,
-            message: 'Review added',
+            message: 'Review submitted. It will appear publicly after approval.',
             data,
         });
     } catch (err) {
