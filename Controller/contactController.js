@@ -54,8 +54,9 @@ export async function submitContactMessage(req, res) {
       <p style="white-space: pre-wrap;">${escapeHtml(message)}</p>
     `;
 
+    const subjectPrefix = /bulk|corporate\s*\/\s*bulk|wholesale/i.test(subject) ? '[Bulk]' : '[Contact]';
     const mailResult = await sendAdminNotification({
-      subject: `[Contact] ${subject}`,
+      subject: `${subjectPrefix} ${subject}`,
       text,
       html,
     });
