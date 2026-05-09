@@ -5,6 +5,8 @@ import { queueNewAccountNotification } from '../utils/adminNotification.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
+const AUTH_COOKIE_NAME = 'auth_token';
+const AUTH_COOKIE_DOMAIN = process.env.AUTH_COOKIE_DOMAIN || undefined;
 
 if (!JWT_SECRET) {
   console.error('Missing JWT_SECRET in environment variables');
@@ -22,6 +24,35 @@ function signToken(user) {
   return jwt.sign(payload, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });
+}
+
+function authCookieOptions() {
+  const isProduction = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 24 * 60 * 60 * 1000,
+    ...(AUTH_COOKIE_DOMAIN ? { domain: AUTH_COOKIE_DOMAIN } : {}),
+  };
+}
+
+function setAuthCookie(res, token) {
+  const options = authCookieOptions();
+  const encoded = encodeURIComponent(token);
+  let cookie = `${AUTH_COOKIE_NAME}=${encoded}; Path=${options.path}; Max-Age=${Math.floor(options.maxAge / 1000)}; HttpOnly; SameSite=Lax`;
+  if (options.secure) cookie += '; Secure';
+  if (options.domain) cookie += `; Domain=${options.domain}`;
+  res.setHeader('Set-Cookie', cookie);
+}
+
+function clearAuthCookie(res) {
+  const options = authCookieOptions();
+  let cookie = `${AUTH_COOKIE_NAME}=; Path=${options.path}; Max-Age=0; HttpOnly; SameSite=Lax`;
+  if (options.secure) cookie += '; Secure';
+  if (options.domain) cookie += `; Domain=${options.domain}`;
+  res.setHeader('Set-Cookie', cookie);
 }
 
 const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 5);
@@ -293,9 +324,10 @@ export const me = async (req, res) => {
 };
 
 export const logout = async (req, res) => {
+  clearAuthCookie(res);
   res.json({
     success: true,
-    message: 'Logged out successfully (client should delete token)',
+    message: 'Logged out successfully',
   });
 };
 
@@ -512,6 +544,7 @@ export const verifyPhoneOtp = async (req, res) => {
 
     const user = await createOrFetchPhoneUser(phoneNumber, fullNameForUser);
     const token = signToken(user);
+    setAuthCookie(res, token);
 
     if (isNewPhoneUser && isSignupFlow) {
       queueNewAccountNotification(user);
@@ -520,7 +553,6 @@ export const verifyPhoneOtp = async (req, res) => {
     return res.json({
       success: true,
       message: 'Phone verified successfully',
-      token,
       user: publicAuthUser(user),
     });
   } catch (err) {

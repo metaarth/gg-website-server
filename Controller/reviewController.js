@@ -13,6 +13,31 @@ const MIME_TO_EXT = {
     'image/webp': 'webp',
 };
 
+function hasPngSignature(buffer) {
+    const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    return sig.every((byte, idx) => buffer[idx] === byte);
+}
+
+function hasJpegSignature(buffer) {
+    return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[buffer.length - 2] === 0xff && buffer[buffer.length - 1] === 0xd9;
+}
+
+function hasWebpSignature(buffer) {
+    if (buffer.length < 12) return false;
+    return (
+        buffer.toString('ascii', 0, 4) === 'RIFF' &&
+        buffer.toString('ascii', 8, 12) === 'WEBP'
+    );
+}
+
+function isValidImageBuffer(mime, buffer) {
+    if (!Buffer.isBuffer(buffer) || buffer.length < 12) return false;
+    if (mime === 'image/png') return hasPngSignature(buffer);
+    if (mime === 'image/jpeg') return hasJpegSignature(buffer);
+    if (mime === 'image/webp') return hasWebpSignature(buffer);
+    return false;
+}
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const isUuid = (value) => UUID_REGEX.test(String(value || '').trim());
@@ -229,6 +254,12 @@ export const uploadReviewImage = async (req, res) => {
                 message: 'Image file is required',
             });
         }
+        if (!isValidImageBuffer(req.file.mimetype, req.file.buffer)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Uploaded file content does not match allowed image formats.',
+            });
+        }
 
         const ext = MIME_TO_EXT[req.file.mimetype] || 'jpg';
         const objectKey = `${REVIEWS_PREFIX}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
@@ -275,7 +306,7 @@ export const uploadReviewImage = async (req, res) => {
 
         return res.status(500).json({
             success: false,
-            message: `Failed to upload review image: ${awsMessage}`,
+            message: 'Failed to upload review image',
         });
     }
 };

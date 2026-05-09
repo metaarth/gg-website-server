@@ -8,8 +8,7 @@ if (!JWT_SECRET) {
 }
 
 export const authenticate = (req, res, next) => {
-  const authHeader = req.headers.authorization || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const token = getTokenFromRequest(req);
 
   if (!token) {
     return res.status(401).json({
@@ -31,8 +30,7 @@ export const authenticate = (req, res, next) => {
 };
 
 export const optionalAuthenticate = (req, _res, next) => {
-  const authHeader = req.headers.authorization || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const token = getTokenFromRequest(req);
 
   if (!token) {
     req.user = null;
@@ -47,4 +45,28 @@ export const optionalAuthenticate = (req, _res, next) => {
   }
   return next();
 };
+
+function parseCookieToken(req) {
+  const cookieHeader = String(req.headers.cookie || '');
+  if (!cookieHeader) return null;
+  const parts = cookieHeader.split(';');
+  for (const part of parts) {
+    const [rawKey, ...rawValueParts] = part.trim().split('=');
+    if (rawKey !== 'auth_token') continue;
+    const rawValue = rawValueParts.join('=');
+    if (!rawValue) return null;
+    try {
+      return decodeURIComponent(rawValue);
+    } catch {
+      return rawValue;
+    }
+  }
+  return null;
+}
+
+function getTokenFromRequest(req) {
+  const authHeader = req.headers.authorization || '';
+  if (authHeader.startsWith('Bearer ')) return authHeader.slice(7);
+  return parseCookieToken(req);
+}
 

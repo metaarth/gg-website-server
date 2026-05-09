@@ -131,12 +131,36 @@ const paymentInitLimiter = rateLimit({
   max: 30,
   message: { success: false, message: 'Too many attempts' },
 });
+const paymentCallbackLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 120,
+  message: { success: false, message: 'Too many callback attempts' },
+});
+const contactLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { success: false, message: 'Too many contact requests. Please try again later.' },
+});
+const preorderLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { success: false, message: 'Too many preorder requests. Please try again later.' },
+});
+const reviewUploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { success: false, message: 'Too many upload attempts. Please try again later.' },
+});
 
 app.use('/api/', apiLimiter);
 app.use('/api/auth/otp/send', otpSendPerPhoneLimiter);
 app.use('/api/auth/otp/send', otpSendIpLimiter);
 app.use('/api/auth/otp/verify', otpVerifyLimiter);
 app.use('/api/payment/initiate', paymentInitLimiter);
+app.use('/api/payment/callback', paymentCallbackLimiter);
+app.use('/api/contact', contactLimiter);
+app.use('/api/preorders', preorderLimiter);
+app.use('/api/reviews/upload-image', reviewUploadLimiter);
 
 // Payment callback must be registered BEFORE CORS so Easebuzz redirect is never blocked
 app.post('/api/payment/callback', paymentCallback);

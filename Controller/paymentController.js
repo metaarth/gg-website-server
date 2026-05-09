@@ -14,11 +14,10 @@ const EASEBUZZ_BASE_URL =
 
 function getPublicBaseUrl(req) {
     if (PAYMENT_CALLBACK_BASE_URL) return PAYMENT_CALLBACK_BASE_URL;
-    const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-    const proto = xfProto || req.protocol || 'http';
-    const host = req.get('x-forwarded-host') || req.get('host');
-    const safeProto = host && !/localhost|127\.0\.0\.1/i.test(host) ? 'https' : proto;
-    return `${safeProto}://${host}`;
+    if (process.env.NODE_ENV === 'production') {
+        throw new Error('PAYMENT_CALLBACK_BASE_URL is required in production');
+    }
+    return 'http://localhost:5000';
 }
 
 function generatePaymentHash(data, key, salt) {
@@ -76,6 +75,23 @@ async function markOrderDraftFailed(draftId) {
         // Older schema may not have `status` column; do not break callback flow for this.
         if (err?.code === '42703' && String(err?.message || '').includes('status')) {
             return;
+        }
+        throw err;
+    }
+}
+
+async function markDraftProcessingIfPending(draftId) {
+    if (!draftId) return false;
+    try {
+        const updated = await query(
+            "UPDATE order_drafts SET status = 'processing' WHERE id = $1 AND COALESCE(status, 'pending') IN ('pending','processing') RETURNING id, status",
+            [draftId],
+        );
+        return (updated.rows || []).length > 0;
+    } catch (err) {
+        // Backward compatibility for schemas without status column.
+        if (err?.code === '42703' && String(err?.message || '').includes('status')) {
+            return true;
         }
         throw err;
     }
@@ -264,6 +280,12 @@ export const initiatePayment = async (req, res) => {
             email,
             phone,
         } = req.body;
+        if (String(payment_method || '').toLowerCase() === 'cod') {
+            return res.status(400).json({
+                success: false,
+                message: 'COD is not supported on online payment initiate route.',
+            });
+        }
 
         if (!address_id || !items || !Array.isArray(items) || items.length === 0) {
             return res.status(400).json({
@@ -371,18 +393,9 @@ export const initiatePayment = async (req, res) => {
             );
         } catch (dbErr) {
             console.error('order_drafts insert error:', dbErr.message, dbErr.code, dbErr.detail);
-            const msg = dbErr.message || 'Database error';
-            const hint =
-                dbErr.code === '42P01'
-                    ? 'Table order_drafts does not exist. Run Server/schema/order_drafts_table.sql in pgAdmin.'
-                    : msg.toLowerCase().includes('uuid') || dbErr.code === '22P02'
-                        ? 'order_drafts may use UUID for user_id/address_id. Run Server/schema/fix_order_drafts_user_id.sql to align with app (bigint user_id).'
-                        : undefined;
             return res.status(500).json({
                 success: false,
-                message: hint ? `Failed to create payment session. ${hint}` : 'Failed to create payment session',
-                error: msg,
-                ...(hint && { hint }),
+                message: 'Failed to create payment session',
             });
         }
 
@@ -454,12 +467,21 @@ export const initiatePayment = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Payment initiation failed',
-            error: error?.message || String(error),
         });
     }
 };
 
+async function acquireCallbackLock(lockKey) {
+    const r = await query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [String(lockKey)]);
+    return Boolean(r.rows?.[0]?.locked);
+}
+
+async function releaseCallbackLock(lockKey) {
+    await query('SELECT pg_advisory_unlock(hashtext($1))', [String(lockKey)]);
+}
+
 export const paymentCallback = async (req, res) => {
+    let lockKey = null;
     try {
         const body = req.body || {};
         const receivedHash = body.hash;
@@ -476,6 +498,10 @@ export const paymentCallback = async (req, res) => {
         }
 
         const status = (body.status || '').toLowerCase();
+        if (String(body.key || '') !== String(EASEBUZZ_KEY || '')) {
+            console.error('paymentCallback: key mismatch', { txnid: body.txnid });
+            return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=key_mismatch`);
+        }
         const draftId = body.udf1 || body.txnid;
 
         if (status === 'success' || status === 'captured') {
@@ -485,9 +511,23 @@ export const paymentCallback = async (req, res) => {
             }
 
             const txnKey = String(draftId);
+            lockKey = txnKey;
+            const lockAcquired = await acquireCallbackLock(lockKey);
+            if (!lockAcquired) {
+                return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=callback_in_progress`);
+            }
             const alreadyPaid = await findOrderByEasebuzzTxn(txnKey);
             if (alreadyPaid?.id) {
                 return res.redirect(302, `${FRONTEND_URL}/order-success?order_id=${alreadyPaid.id}`);
+            }
+
+            const marked = await markDraftProcessingIfPending(draftId);
+            if (!marked) {
+                const maybePaid = await findOrderByEasebuzzTxn(txnKey);
+                if (maybePaid?.id) {
+                    return res.redirect(302, `${FRONTEND_URL}/order-success?order_id=${maybePaid.id}`);
+                }
+                return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=draft_locked`);
             }
 
             const draftRes = await query(
@@ -503,6 +543,13 @@ export const paymentCallback = async (req, res) => {
                 }
                 console.error('paymentCallback: draft not found', { draftId });
                 return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=draft_not_found`);
+            }
+            const callbackAmount = Number(body.amount || 0);
+            const draftAmount = Number(draft.final_amount || 0);
+            if (!amountsMatch(callbackAmount, draftAmount)) {
+                console.error('paymentCallback: amount mismatch', { callbackAmount, draftAmount, draftId });
+                await markOrderDraftFailed(draftId).catch(() => {});
+                return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=amount_mismatch`);
             }
 
             const items = typeof draft.items === 'object' && Array.isArray(draft.items)
@@ -545,5 +592,13 @@ export const paymentCallback = async (req, res) => {
     } catch (error) {
         console.error('paymentCallback error:', error?.message, error);
         return res.redirect(302, `${FRONTEND_URL}/order-failed?reason=error`);
+    } finally {
+        if (lockKey) {
+            try {
+                await releaseCallbackLock(lockKey);
+            } catch (_e) {
+                // No-op
+            }
+        }
     }
 };

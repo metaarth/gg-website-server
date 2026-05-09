@@ -55,6 +55,13 @@ export const createOrder = async (req, res) => {
 
         const normalizedPaymentMethod =
             String(payment_method).toLowerCase() === 'cod' ? 'cod' : String(payment_method);
+        const allowedDirectMethods = new Set(['cod', 'wallet']);
+        if (!allowedDirectMethods.has(normalizedPaymentMethod)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid payment method for direct order. Use COD or wallet.',
+            });
+        }
 
         const pricing = await validateCheckoutTotals({
             items,
