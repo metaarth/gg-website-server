@@ -1,9 +1,8 @@
+# Legacy — deployment moved to EC2 + Docker. Use repo-root `.github/workflows/deploy-ec2-docker.yml`.
+# Kept for reference; does not run on push.
 name: Deploy to Elastic Beanstalk
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:
